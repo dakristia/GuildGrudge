@@ -78,6 +78,23 @@ test("note text with ^ and | is cleaned and messages stay <= 255 bytes", functio
   assert(#n.text <= a.ns.MAX_NOTE, "note within MAX_NOTE")
 end)
 
+test("received text is cleaned of chat escape codes", function()
+  local a, b = unpack(guild(2))
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "N^1^evil^Evil|Hx|h^^WARRIOR^id1^Bad|Tguy^" .. W.serverTime .. "^0^Zone|r^hi |cffff0000red|Hitem:1|h[link]|h",
+    "GUILD")
+  assert(next(b.ns.db.entries), "message was received")
+  for k, entry in pairs(b.ns.db.entries) do
+    assert(not k:find("|", 1, true), "key has |: " .. k)
+    assert(not entry.name:find("|", 1, true), "name has |")
+    for _, n in pairs(entry.notes) do
+      for _, field in ipairs({ "text", "author", "zone" }) do
+        assert(not n[field]:find("|", 1, true), field .. " has |: " .. n[field])
+      end
+    end
+  end
+end)
+
 test("login sync: exactly one guildie answers and the newcomer gets everything", function()
   local cs = guild(3)
   local a = cs[1]

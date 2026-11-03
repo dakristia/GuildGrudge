@@ -164,6 +164,8 @@ function GG:OnAddonMessage(prefix, msg, channel, sender)
   if channel ~= "GUILD" and not roster[who] then return end
   local t = { strsplit(SEP, msg) }
   if t[2] ~= PROTO then return end
+  -- A tampered client could send chat escape codes (fake links, textures).
+  for i = 3, #t do t[i] = self:Clean(t[i]) end
   local h = handlers[t[1]]
   if h then h(t, channel, sender) end
 end
