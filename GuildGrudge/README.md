@@ -1,21 +1,23 @@
-# Guild Grudge (v0.1.0, untested starter)
+# Guild Grudge (v0.2.0, not yet tested in game)
 
-A shared kill-on-sight list for your guild: notes on gankers, fictive bounties, guild sync and an alert when a listed player shows up near you.
+A shared kill-on-sight list for your guild: notes on gankers, fictive bounties, guild sync and an alert when a listed player shows up near you. Built for World of Warcraft: Forever (interface 16001).
 
 ## Install
 1. Unzip so you get a folder called `GuildGrudge` with `GuildGrudge.toc` inside.
-2. Put it in your WoW Forever AddOns folder (`World of Warcraft/_<forever folder>_/Interface/AddOns/`).
+2. Put it in `World of Warcraft/_forever_/Interface/AddOns/`.
 3. Everyone in the guild needs it. Data only flows between people who have it.
 
 ## Commands
+Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show`, `del`, `unbounty` and `claim` also accept only the first name if one player on the list has it.
+
 | Command | What it does |
 |---|---|
 | `/gg` | Open the Most Wanted window |
 | `/gg t <note>` | Add a note on your current target (also records class, race, level) |
-| `/gg add <name> <note>` | Add a note by name |
+| `/gg add <first> <surname> <note>` | Add a note by name |
 | `/gg show <name>` | Print everything on a player |
 | `/gg del <name>` | Remove your own notes on a player |
-| `/gg bounty <name> <reward>` | Post a bounty (e.g. `50g and eternal glory`) |
+| `/gg bounty <first> <surname> <reward>` | Post a bounty (e.g. `50g and eternal glory`) |
 | `/gg unbounty <name>` | Remove a bounty |
 | `/gg claim <name>` | Claim a bounty manually |
 | `/gg top` | Most wanted and top bounty hunters |
@@ -24,18 +26,20 @@ A shared kill-on-sight list for your guild: notes on gankers, fictive bounties, 
 
 ## How it works
 - **Storage:** `SavedVariables` (`GuildGrudgeDB`), account-wide, so your alts share the list.
-- **Sync:** hidden addon messages on the guild channel. New notes and bounties go out live. On login the addon asks the guild for anything newer than what it has; one online guildie answers by whisper.
-- **Detection:** combat log (hostile players fighting or casting within ~50 yards), nameplates, target and mouseover. Alerts have a 60-second cooldown per player.
-- **Bounties:** killing a player with an open bounty (killing blow, via `PARTY_KILL`) auto-claims it and posts in guild chat.
+- **Sync:** hidden addon messages on the guild channel. New notes and bounties go out live. On login the addon asks the guild for anything newer than what it has, and one online guildie answers by whisper. Blizzard allows about 1 addon message per second, so a big sync takes a while (100 notes ≈ 2 minutes). Nothing is sent inside dungeons, raids or battlegrounds, where addon messages are blocked; the queue waits.
+- **Detection:** nameplates, target and mouseover. Forever blocks addons from the combat log, so a ganker you never see a nameplate for is not detected. Turn enemy nameplates on (`V`). Alerts have a 60-second cooldown per player.
+- **Bounties:** getting the killing blow on a player with an open bounty (the `PARTY_KILL` event) claims it and posts in guild chat.
 - **Tooltip:** listed players get a "Grudge: N notes / Bounty" line.
 
-## Check these first when Forever is live
-1. **Interface number.** Run `/dump select(4, GetBuildInfo())` in game and put the number in `## Interface:` in the .toc. Until then, tick "Load out of date AddOns".
-2. **Names in a realmless game.** Run `/dump UnitName("target")` on an enemy player and look at how names appear in the combat log. If the format differs from `Name` or `Name-Realm`, adjust `SplitName`/`MakeKey` in `Core.lua`.
-3. **Whisper sync.** Sync replies use addon whispers. If those don't reach people, switch `DumpTo` in `Sync.lua` to the `GUILD` channel.
-4. **Error messages.** Turn on `/console scriptErrors 1` during testing.
+## Check these first in game
+1. **Errors:** `/console scriptErrors 1`.
+2. **Sender names:** with two accounts in the guild, add a note on one and check that the other prints "<First Surname> added …". If nothing arrives, run `/dump GetGuildRosterInfo(1)` and tell the developer the exact format.
+3. **Whisper sync:** log in the second account later and check that `/gg` shows the notes after about 20 seconds. If it doesn't, addon whispers may not work realmless. The fallback is to send the sync dump on `GUILD` (`DumpTo` in `Sync.lua`).
+4. **Bounty claim:** kill a player with a bounty and check the claim. If it doesn't fire, `/eventtrace` and look for `PARTY_KILL`.
 
-## Ideas for v0.2
+Development notes and tests: see the repo root (`tests/run.lua`, `docs/forever-api-findings.md`).
+
+## Ideas for later
 - Clickable list rows with an edit box instead of text
 - Minimap button
 - Map pins for "last seen" locations
