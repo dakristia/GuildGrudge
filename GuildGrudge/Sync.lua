@@ -55,6 +55,8 @@ function GG:Send(msg, channel, target)
   if not ticker then ticker = C_Timer.NewTicker(SEND_INTERVAL, pump) end
 end
 
+function GG:QueueLength() return #queue end
+
 function GG:SendNote(key, e, n, channel, target)
   local head = join("N", PROTO, key, e.name, "", e.class, n.id, n.author, n.ts, n.deleted and 1 or 0, n.zone, "")
   self:Send(head .. self:Cut(n.deleted and "" or n.text, 250 - #head), channel, target)
@@ -160,6 +162,7 @@ function GG:OnAddonMessage(prefix, msg, channel, sender)
   if prefix ~= self.PREFIX or not self.db then return end
   local who = self:Who(sender)
   if not who or who == self:Me() then return end
+  self.lastSender = sender -- raw, for /gg debug
   -- Only listen to guildies (guild channel, or whispers from roster members).
   if channel ~= "GUILD" and not roster[who] then return end
   local t = { strsplit(SEP, msg) }

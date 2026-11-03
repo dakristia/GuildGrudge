@@ -57,6 +57,7 @@ end
 
 -- PARTY_KILL: someone in your group got a killing blow.
 function GG:OnPartyKill(attackerGUID, targetGUID)
+  self.sawPartyKill = true -- for /gg debug: proves the event fires at all
   if not attackerGUID or not targetGUID or self:Secret(attackerGUID, targetGUID) then return end
   if attackerGUID ~= UnitGUID("player") then return end
   local full = self.seenGUIDs[targetGUID]

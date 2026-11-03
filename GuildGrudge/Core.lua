@@ -373,6 +373,23 @@ function GG:Top()
   end
 end
 
+-- What the live client actually returns for the things we could only guess
+-- before launch: name formats, the roster and addon message senders.
+function GG:Debug()
+  local function q(v) return v == nil and "nil" or ('"' .. tostring(v) .. '"') end
+  local name, second = UnitName("player")
+  self:Print(("UnitName(\"player\"): %s, %s -> me = %s"):format(q(name), q(second), q(self:Me())))
+  self:Print("regional names: " .. tostring(self:Regional()))
+  local first = GetNumGuildMembers() > 0 and GetGuildRosterInfo(1) or nil
+  self:Print(("roster[1]: %s -> %s"):format(q(first), q(first and self:Who(first))))
+  self:Print(("last sender: %s -> %s"):format(q(self.lastSender), q(self.lastSender and self:Who(self.lastSender))))
+  local entries = 0
+  for _ in pairs(self.db.entries) do entries = entries + 1 end
+  self:Print(("interface: %s, combat log API: %s, PARTY_KILL seen: %s"):format(
+    tostring(select(4, GetBuildInfo())), CombatLogGetCurrentEventInfo and "yes" or "no", tostring(self.sawPartyKill or false)))
+  self:Print(("send queue: %d, entries: %d"):format(self:QueueLength(), entries))
+end
+
 ---------------------------------------------------------------------------
 -- Slash commands
 ---------------------------------------------------------------------------
@@ -386,6 +403,7 @@ local HELP = {
   "/gg unbounty <name> - remove a bounty",
   "/gg claim <name> - claim a bounty manually",
   "/gg top - most wanted and top bounty hunters",
+  "/gg debug - print name formats and sync state (for bug reports)",
   "/gg sync | fullsync - pull data from online guildies",
   "/gg alerts | sound | spotted | claims - toggle options",
   "<name> is the full name: Ana Forever or Ana-Forever (show/del/claim also take just Ana)",
@@ -424,6 +442,8 @@ SlashCmdList.GUILDGRUDGE = function(msg)
     GG:ClearBounty(rest)
   elseif cmd == "claim" then
     GG:TryClaim(rest, true)
+  elseif cmd == "debug" then
+    GG:Debug()
   elseif cmd == "top" then
     GG:Top()
   elseif cmd == "sync" or cmd == "fullsync" then

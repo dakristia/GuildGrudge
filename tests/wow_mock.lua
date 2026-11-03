@@ -87,6 +87,7 @@ function M.newClient(opts)
     time = function() return M.serverTime end,
     GetTime = function() return M.now end,
     GetServerTime = function() return M.serverTime end,
+    GetBuildInfo = function() return "1.60.1", "70755", "Nov 3 2026", 16001 end,
     COMBATLOG_OBJECT_TYPE_PLAYER = 0x400,
     COMBATLOG_OBJECT_REACTION_HOSTILE = 0x40,
     CombatLogGetCurrentEventInfo = opts.combatLogApi,

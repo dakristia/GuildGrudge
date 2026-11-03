@@ -246,6 +246,22 @@ test("Forever kill: PARTY_KILL resolves an unseen GUID with GetPlayerInfoByGUID"
   eq(a.ns:Find("Ana Forever").bounty.claimedBy, "Me Myself")
 end)
 
+test("Forever: /gg debug prints the name formats the live client uses", function()
+  local a = forever("Ana", "Smith", "Ana-Smith")
+  local b = forever("Bob", "Stone", "Bob-Stone")
+  W.slash(a, "add Gank Master rude")
+  W.advance(2)
+  b.chat = {}
+  W.slash(b, "debug")
+  local out = table.concat(b.chat, "\n")
+  for _, want in ipairs({ 'UnitName%("player"%): "Bob", "Stone"', "regional names: true",
+                          'roster%[1%]: "Ana%-Smith"', 'last sender: "Ana%-Smith" %-> "Ana Smith"',
+                          "combat log API: no", "send queue: 0" }) do
+    assert(out:find(want), "missing " .. want .. " in:\n" .. out)
+  end
+  noErrors(b)
+end)
+
 test("Forever kill: someone else's kill does not claim", function()
   local a = forever("Me", "Myself")
   W.slash(a, "bounty Ana Forever 50g")

@@ -23,6 +23,7 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 | `/gg top` | Most wanted and top bounty hunters |
 | `/gg sync` / `/gg fullsync` | Pull updates / everything from online guildies |
 | `/gg alerts`, `sound`, `spotted`, `claims` | Toggle alerts, alert sound, sharing sightings, guild-chat claim announcements |
+| `/gg debug` | Print name formats and sync state, for bug reports |
 
 ## How it works
 - **Storage:** `SavedVariables` (`GuildGrudgeDB`), account-wide, so your alts share the list.
@@ -33,7 +34,7 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 
 ## Check these first in game
 1. **Errors:** `/console scriptErrors 1`.
-2. **Sender names:** with two accounts in the guild, add a note on one and check that the other prints "<First Surname> added …". If nothing arrives, run `/dump GetGuildRosterInfo(1)` and tell the developer the exact format.
+2. **Sender names:** with two accounts in the guild, add a note on one and check that the other prints "<First Surname> added …". Then run `/gg debug` on the receiving account and send the output to the developer, whether it worked or not.
 3. **Whisper sync:** log in the second account later and check that `/gg` shows the notes after about 20 seconds. If it doesn't, addon whispers may not work realmless. The fallback is to send the sync dump on `GUILD` (`DumpTo` in `Sync.lua`).
 4. **Bounty claim:** kill a player with a bounty and check the claim. If it doesn't fire, `/eventtrace` and look for `PARTY_KILL`.
 
