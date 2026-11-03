@@ -1,0 +1,11 @@
+## Interface: 11507
+## Title: Guild Grudge
+## Notes: Shared guild kill-on-sight list with notes, bounties and proximity alerts.
+## Author: Your Guild
+## Version: 0.1.0
+## SavedVariables: GuildGrudgeDB
+
+Core.lua
+Sync.lua
+Detect.lua
+UI.lua
