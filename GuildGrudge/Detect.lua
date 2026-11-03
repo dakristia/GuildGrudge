@@ -8,14 +8,6 @@ local ADDON, GG = ...
 
 local lastAlert, lastShare = {}, {}
 
-local function secret(...)
-  if not issecretvalue then return false end
-  for i = 1, select("#", ...) do
-    if issecretvalue((select(i, ...))) then return true end
-  end
-  return false
-end
-
 function GG:Alert(e)
   if not self.db.settings.alerts then return end
   local head = self:ColorName(e) .. " is nearby!"
@@ -65,12 +57,12 @@ end
 
 -- PARTY_KILL: someone in your group got a killing blow.
 function GG:OnPartyKill(attackerGUID, targetGUID)
-  if not attackerGUID or not targetGUID or secret(attackerGUID, targetGUID) then return end
+  if not attackerGUID or not targetGUID or self:Secret(attackerGUID, targetGUID) then return end
   if attackerGUID ~= UnitGUID("player") then return end
   local full = self.seenGUIDs[targetGUID]
   if not full and GetPlayerInfoByGUID then
     local _, _, _, _, _, name, second = GetPlayerInfoByGUID(targetGUID)
-    if not secret(name, second) then full = self:FullName(name, second) end
+    if not self:Secret(name, second) then full = self:FullName(name, second) end
   end
   if full then self:TryClaim(full) end
 end

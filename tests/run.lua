@@ -151,6 +151,23 @@ test("Forever names: /gg show Ana finds Ana Forever when she is the only Ana", f
   assert(not a.ns:Find("ana"), "ambiguous first name finds nothing")
 end)
 
+test("Forever names: /gg add Ana <note> hints at the listed Ana", function()
+  local a = forever("Me", "Myself")
+  W.slash(a, "add Ana Forever camped me")
+  a.chat = {}
+  W.slash(a, "add Ana camped again")
+  assert(table.concat(a.chat, " "):find("Did you mean Ana Forever", 1, true), "hint: " .. table.concat(a.chat, " / "))
+end)
+
+test("Forever names: an ambiguous first name says so", function()
+  local a = forever("Me", "Myself")
+  W.slash(a, "add Ana Forever one")
+  W.slash(a, "add Ana Other two")
+  a.chat = {}
+  W.slash(a, "show Ana")
+  assert(table.concat(a.chat, " "):find("More than one", 1, true), "ambiguity message: " .. table.concat(a.chat, " / "))
+end)
+
 test("Forever names: bounty on a two-part name keeps the whole reward", function()
   local a = forever("Me", "Myself")
   W.slash(a, "bounty Ana Forever 50g and glory")

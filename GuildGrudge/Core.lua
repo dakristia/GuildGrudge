@@ -71,9 +71,19 @@ function GG:FullName(name, second)
   return self:NormalizeName(name)
 end
 
+-- Midnight-era clients hide some unit data as "secret values" that addon code
+-- can't compare, use as table keys or send. True if any argument is one.
+function GG:Secret(...)
+  if not issecretvalue then return false end
+  for i = 1, select("#", ...) do
+    if issecretvalue((select(i, ...))) then return true end
+  end
+  return false
+end
+
 function GG:UnitFullName(unit)
   local name, second = UnitName(unit)
-  if issecretvalue and (issecretvalue(name) or issecretvalue(second)) then return nil end
+  if self:Secret(name, second) then return nil end
   return self:FullName(name, second)
 end
 
@@ -98,6 +108,14 @@ function GG:TakeName(msg)
     first = first .. " " .. surname
   end
   return self:NormalizeName(first), strtrim(rest or "")
+end
+
+-- "/gg add Ana camped me" makes "Ana Camped". If that is new and another Ana
+-- is listed, the user probably forgot the surname, so say so.
+function GG:HintNewName(name)
+  if not self:Regional() or not name or self:GetEntry(name, false) then return end
+  local other = self:Find(name:match("^[^%s%-]+"))
+  if other then self:Print("New player", name .. ". Did you mean", other.name .. "? Use the full name.") end
 end
 
 function GG:MakeKey(full)
@@ -167,23 +185,29 @@ function GG:Find(input)
   local hit, hitKey
   for k, v in pairs(self.db.entries) do
     if k:match("^[^%s%-]+") == key then
-      if hit then return end
+      if hit then return nil, nil, true end -- third value: ambiguous
       hit, hitKey = v, k
     end
   end
   return hit, hitKey
 end
 
+function GG:NotFound(input, ambiguous)
+  if ambiguous then return self:Print("More than one", input, "on the list. Use the full name.") end
+  self:Print(input, "is not on the list.")
+end
+
 -- Remember what a real unit tells us about a player.
 GG.seenGUIDs = {} -- GUID -> full name, this session only (for PARTY_KILL)
 function GG:Learn(e, unit)
   e.name  = self:UnitFullName(unit) or e.name
-  e.class = select(2, UnitClass(unit)) or e.class
-  e.race  = UnitRace(unit) or e.race
-  local lvl = UnitLevel(unit)
+  local _, class = UnitClass(unit)
+  local race, lvl, guid = UnitRace(unit), UnitLevel(unit), UnitGUID(unit)
+  if self:Secret(class, race, lvl, guid) then return end
+  e.class = class or e.class
+  e.race  = race or e.race
   if lvl and lvl > 0 then e.level = lvl end
-  local guid = UnitGUID(unit)
-  if guid and not (issecretvalue and issecretvalue(guid)) then self.seenGUIDs[guid] = e.name end
+  if guid then self.seenGUIDs[guid] = e.name end
 end
 
 function GG:SortedNotes(e)
@@ -258,8 +282,8 @@ function GG:AddNote(name, text, unit)
 end
 
 function GG:DeleteMyNotes(input)
-  local e, key = self:Find(input)
-  if not e then return self:Print(input, "is not on the list.") end
+  local e, key, ambiguous = self:Find(input)
+  if not e then return self:NotFound(input, ambiguous) end
   local me, count = self:Me(), 0
   for _, n in pairs(e.notes) do
     if n.author == me and not n.deleted then
@@ -314,8 +338,8 @@ function GG:TryClaim(name, manual)
 end
 
 function GG:Show(input)
-  local e = self:Find(input)
-  if not e then return self:Print(input, "is not on the list.") end
+  local e, _, ambiguous = self:Find(input)
+  if not e then return self:NotFound(input, ambiguous) end
   local info = strtrim(("%s %s %s"):format(e.level and ("lvl " .. e.level) or "", e.race or "", e.class and strlower(e.class) or ""))
   self:Print(self:ColorName(e), info ~= "" and ("(" .. info .. ")") or "")
   local b = self:ActiveBounty(e)
@@ -380,10 +404,13 @@ SlashCmdList.GUILDGRUDGE = function(msg)
     GG:ToggleUI()
   elseif cmd == "t" or cmd == "target" then
     if not UnitIsPlayer("target") then return GG:Print("Target a player first.") end
-    GG:AddNote(GG:UnitFullName("target"), rest, "target")
+    local name = GG:UnitFullName("target")
+    if not name then return GG:Print("Can't read that player's name here. Use /gg add <name> <note>.") end
+    GG:AddNote(name, rest, "target")
   elseif cmd == "add" then
     local name, note = GG:TakeName(rest)
     if not name then return GG:Print("Usage: /gg add <name> <note>") end
+    GG:HintNewName(name)
     GG:AddNote(name, note)
   elseif cmd == "show" then
     GG:Show(rest)
@@ -391,6 +418,7 @@ SlashCmdList.GUILDGRUDGE = function(msg)
     GG:DeleteMyNotes(rest)
   elseif cmd == "bounty" then
     local name, reward = GG:TakeName(rest)
+    GG:HintNewName(name)
     GG:SetBounty(name, reward)
   elseif cmd == "unbounty" then
     GG:ClearBounty(rest)

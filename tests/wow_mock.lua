@@ -59,11 +59,12 @@ function M.newClient(opts)
   -- How the server spells this character in chat events and the guild roster.
   -- Unconfirmed for Forever, so tests try both "Ana Smith" and "Ana-Smith".
   c.wire = opts.wire or c.full
+  local forbidEvents = opts.forbidEvents or (opts.forever and { COMBAT_LOG_EVENT_UNFILTERED = true })
   local env = {}
   c.env = env
 
   local function register(frame, event)
-    if opts.forbidEvents and opts.forbidEvents[event] then
+    if forbidEvents and forbidEvents[event] then
       error("Frame:RegisterEvent(): " .. event .. " is restricted", 2)
     end
     c.events[event] = c.events[event] or {}
@@ -162,7 +163,6 @@ function M.newClient(opts)
     env.RaidWarningUtil = { AddMessage = function(text) table.insert(c.chat, "RW: " .. text) end }
     env.C_ChatInfo.SendChatMessage = function(msg, chan) table.insert(M.guildChat, msg) end
     env.Enum.SendAddonMessageResult = { Success = 0, AddonMessageThrottle = 3, ChannelThrottle = 8 }
-    opts.forbidEvents = opts.forbidEvents or { COMBAT_LOG_EVENT_UNFILTERED = true }
   end
   if opts.override then for k, v in pairs(opts.override) do env[k] = v end end
   setmetatable(env, { __index = _G })
