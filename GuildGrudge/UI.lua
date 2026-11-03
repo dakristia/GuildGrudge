@@ -114,8 +114,7 @@ local function OnTooltipUnit(tt)
   if tt ~= GameTooltip or not GG.db then return end
   local _, unit = tt:GetUnit()
   if not unit or not UnitIsPlayer(unit) then return end
-  local name, realm = UnitName(unit)
-  local e = GG:GetEntry(name, realm or "", false)
+  local e = GG:GetEntry(GG:UnitFullName(unit), false)
   if not e or not GG:IsListed(e) then return end
   local n = #GG:SortedNotes(e)
   tt:AddLine(("|cffff5533Grudge:|r %d note%s"):format(n, n == 1 and "" or "s"))

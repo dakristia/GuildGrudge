@@ -53,7 +53,12 @@ end
 function M.newClient(opts)
   local c = { name = opts.name, surname = opts.surname, realm = opts.realm,
               events = {}, timers = {}, throttle = {}, chat = {}, errors = {} }
-  c.full = opts.full or (opts.name .. (opts.realm and ("-" .. opts.realm) or ""))
+  c.full = opts.full or (opts.surname and (opts.name .. " " .. opts.surname))
+        or (opts.name .. (opts.realm and ("-" .. opts.realm) or ""))
+  c.guid = "Player-" .. c.full
+  -- How the server spells this character in chat events and the guild roster.
+  -- Unconfirmed for Forever, so tests try both "Ana Smith" and "Ana-Smith".
+  c.wire = opts.wire or c.full
   local env = {}
   c.env = env
 
@@ -101,7 +106,7 @@ function M.newClient(opts)
     GetSubZoneText = function() return opts.subzone or "" end,
     IsInGuild = function() return true end,
     GetNumGuildMembers = function() return #M.clients end,
-    GetGuildRosterInfo = function(i) return M.clients[i] and M.clients[i].full end,
+    GetGuildRosterInfo = function(i) return M.clients[i] and M.clients[i].wire end,
     -- The real call answers asynchronously with GUILD_ROSTER_UPDATE.
     C_GuildInfo = { GuildRoster = function()
       table.insert(c.timers, { at = M.now + 0.5, fn = function() M.fire(c, "GUILD_ROSTER_UPDATE") end })
@@ -117,8 +122,16 @@ function M.newClient(opts)
     UnitClass = function(unit) local u = c.units and c.units[unit]; if u then return u.class, u.class end end,
     UnitRace = function(unit) local u = c.units and c.units[unit]; return u and u.race end,
     UnitLevel = function(unit) local u = c.units and c.units[unit]; return u and u.level or 0 end,
-    UnitGUID = function(unit) return unit == "player" and ("Player-" .. c.full) or nil end,
-    SendChatMessage = function(msg, chan) M.guildChat = M.guildChat or {}; table.insert(M.guildChat, msg) end,
+    UnitGUID = function(unit)
+      if unit == "player" then return c.guid end
+      local u = c.units and c.units[unit]
+      return u and u.guid
+    end,
+    GetPlayerInfoByGUID = function(guid)
+      local u = M.guids[guid]
+      if u then return u.class, u.class, u.race, u.race, 2, u.name, u.second or "" end
+    end,
+    SendChatMessage = function(msg, chan) table.insert(M.guildChat, msg) end,
     CreateFrame = function(kind, name)
       local f = stub(kind)
       f.RegisterEvent = register
@@ -139,6 +152,18 @@ function M.newClient(opts)
     },
   }
   for k, v in pairs(api) do env[k] = v end
+  -- Forever (build 1.60.1): two-part names, no combat log API, only the new
+  -- raid-warning and chat functions, and send results as enum codes.
+  if opts.forever then
+    env.RegionalUniqueNamesEnabled = function() return true end
+    env.CombatLogGetCurrentEventInfo = nil
+    env.RaidNotice_AddMessage = nil
+    env.SendChatMessage = nil
+    env.RaidWarningUtil = { AddMessage = function(text) table.insert(c.chat, "RW: " .. text) end }
+    env.C_ChatInfo.SendChatMessage = function(msg, chan) table.insert(M.guildChat, msg) end
+    env.Enum.SendAddonMessageResult = { Success = 0, AddonMessageThrottle = 3, ChannelThrottle = 8 }
+    opts.forbidEvents = opts.forbidEvents or { COMBAT_LOG_EVENT_UNFILTERED = true }
+  end
   if opts.override then for k, v in pairs(opts.override) do env[k] = v end end
   setmetatable(env, { __index = _G })
   env._G = env
@@ -181,10 +206,10 @@ function M.send(c, prefix, msg, channel, target)
   for _, other in ipairs(M.clients) do
     local hit
     if channel == "GUILD" then hit = true
-    elseif channel == "WHISPER" then hit = other ~= c and (target == other.full or target == other.name) end
+    elseif channel == "WHISPER" then hit = other ~= c and (target == other.wire or target == other.full) end
     if hit and other.online ~= false then
       M.log.delivered = M.log.delivered + 1
-      M.fire(other, "CHAT_MSG_ADDON", prefix, msg, channel, c.full, target or "", 0, 0)
+      M.fire(other, "CHAT_MSG_ADDON", prefix, msg, channel, c.wire, target or "", 0, 0)
     end
   end
   return 0
@@ -220,6 +245,7 @@ function M.slash(c, msg) c.env.SlashCmdList.GUILDGRUDGE(msg) end
 
 function M.reset()
   M.clients = {}
+  M.guids = {}
   M.log = { sent = 0, throttled = 0, tooLong = 0, delivered = 0 }
   M.guildChat = {}
 end

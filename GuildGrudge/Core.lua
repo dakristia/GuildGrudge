@@ -2,7 +2,7 @@
 local ADDON, GG = ...
 _G.GuildGrudge = GG
 
-GG.VERSION  = "0.1.0"
+GG.VERSION  = "0.2.0"
 GG.PREFIX   = "GGRUDGE"   -- addon message prefix (max 16 chars)
 GG.MAX_NOTE = 120         -- max note length in bytes (addon messages cap at 255)
 
@@ -40,16 +40,68 @@ function GG:Cut(s, maxBytes)
   return (s:gsub("[\192-\255][\128-\191]*$", ""))
 end
 
-function GG:SplitName(full)
-  local name, realm = strsplit("-", full or "", 2)
-  if realm == "" then realm = nil end
-  return name, realm
+---------------------------------------------------------------------------
+-- Names
+-- Forever is realmless: a character is "First Surname", unique per region,
+-- and the second value of UnitName() is the surname, not a realm. Chat may
+-- spell it "First-Surname". Without regional names we keep "Name-Realm".
+---------------------------------------------------------------------------
+function GG:Regional()
+  return RegionalUniqueNamesEnabled and RegionalUniqueNamesEnabled() or false
 end
 
-function GG:MakeKey(name, realm)
-  local key = strlower(name)
-  if realm and realm ~= "" then key = key .. "-" .. strlower(realm) end
-  return key
+-- Any spelling of a character -> the form we store and compare.
+function GG:NormalizeName(s)
+  if type(s) ~= "string" then return nil end
+  s = strtrim(s)
+  if s == "" then return nil end
+  if self:Regional() then
+    local first, surname = s:match("^([^%s%-]+)[%s%-]+([^%s%-]+)")
+    if first then return first .. " " .. surname end
+  end
+  return s
+end
+
+-- Full name from UnitName()-style parts: (name, surname) or (name, realm).
+function GG:FullName(name, second)
+  if type(name) ~= "string" or name == "" then return nil end
+  if type(second) == "string" and second ~= "" then
+    name = name .. (self:Regional() and " " or "-") .. second
+  end
+  return self:NormalizeName(name)
+end
+
+function GG:UnitFullName(unit)
+  local name, second = UnitName(unit)
+  if issecretvalue and (issecretvalue(name) or issecretvalue(second)) then return nil end
+  return self:FullName(name, second)
+end
+
+-- Our own name as it appears on notes, bounties and claims.
+function GG:Me()
+  if self:Regional() then return self:UnitFullName("player") end
+  return (UnitName("player"))
+end
+
+-- A sender or guild roster name, in the same form as GG:Me().
+function GG:Who(s)
+  if self:Regional() then return self:NormalizeName(s) end
+  return Ambiguate(s, "short")
+end
+
+-- Split "<name> <rest>". A Forever name is two words ("Ana Forever") or "Ana-Forever".
+function GG:TakeName(msg)
+  local first, rest = strsplit(" ", strtrim(msg or ""), 2)
+  if self:Regional() and rest and not first:find("-", 1, true) then
+    local surname
+    surname, rest = strsplit(" ", strtrim(rest), 2)
+    first = first .. " " .. surname
+  end
+  return self:NormalizeName(first), strtrim(rest or "")
+end
+
+function GG:MakeKey(full)
+  return strlower(full)
 end
 
 function GG:Zone()
@@ -70,7 +122,7 @@ end
 
 function GG:ColorName(e)
   local c = e.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[e.class]
-  local name = e.name .. (e.realm and ("-" .. e.realm) or "")
+  local name = e.name
   if not c then return "|cffff4040" .. name .. "|r" end
   local hex = c.colorStr or ("ff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255)
   return "|c" .. hex .. name .. "|r"
@@ -78,8 +130,8 @@ end
 
 ---------------------------------------------------------------------------
 -- Data model
--- GuildGrudgeDB.entries[key] = {
---   name, realm, class, race, level,
+-- GuildGrudgeDB.entries[key] = {        -- key = lowercase full name
+--   name, class, race, level,           -- name = "First Surname" (or "Name-Realm")
 --   lastSeen, lastSeenZone, lastSeenBy,
 --   notes  = { [id] = { id, author, ts, zone, text, deleted } },
 --   bounty = { poster, reward, ts, claimedBy, claimedTs }   -- ts = last change
@@ -96,29 +148,42 @@ function GG:InitDB()
   self.db = db
 end
 
-function GG:GetEntry(name, realm, create)
-  if not name or name == "" then return end
-  if not realm then name, realm = self:SplitName(name) end
-  if realm == "" then realm = nil end
-  local key = self:MakeKey(name, realm)
+function GG:GetEntry(name, create)
+  local full = self:NormalizeName(name)
+  if not full then return end
+  local key = self:MakeKey(full)
   local e = self.db.entries[key]
   if not e and create then
-    e = { name = name, realm = realm, notes = {} }
+    e = { name = full, notes = {} }
     self.db.entries[key] = e
   end
   return e, key
 end
 
--- Lenient lookup for slash commands: "gankmaster" finds "Gankmaster-SomeRealm".
+-- Lenient lookup for slash commands: "ana" finds "Ana Forever" if she is the only Ana.
 function GG:Find(input)
-  local e, key = self:GetEntry(input, nil, false)
-  if e then return e, key end
-  if not input:find("-", 1, true) then
-    local want = strlower(input)
-    for k, v in pairs(self.db.entries) do
-      if strlower(v.name) == want then return v, k end
+  local e, key = self:GetEntry(input, false)
+  if e or not key or key:find("[%s%-]") then return e, key end
+  local hit, hitKey
+  for k, v in pairs(self.db.entries) do
+    if k:match("^[^%s%-]+") == key then
+      if hit then return end
+      hit, hitKey = v, k
     end
   end
+  return hit, hitKey
+end
+
+-- Remember what a real unit tells us about a player.
+GG.seenGUIDs = {} -- GUID -> full name, this session only (for PARTY_KILL)
+function GG:Learn(e, unit)
+  e.name  = self:UnitFullName(unit) or e.name
+  e.class = select(2, UnitClass(unit)) or e.class
+  e.race  = UnitRace(unit) or e.race
+  local lvl = UnitLevel(unit)
+  if lvl and lvl > 0 then e.level = lvl end
+  local guid = UnitGUID(unit)
+  if guid and not (issecretvalue and issecretvalue(guid)) then self.seenGUIDs[guid] = e.name end
 end
 
 function GG:SortedNotes(e)
@@ -175,17 +240,13 @@ end
 ---------------------------------------------------------------------------
 -- Actions
 ---------------------------------------------------------------------------
-function GG:AddNote(name, realm, text, unit)
+function GG:AddNote(name, text, unit)
   text = self:Cut(self:Clean(text), self.MAX_NOTE)
   if text == "" then return self:Print("Write a note, e.g. camped me at the Crossroads FP") end
-  local e, key = self:GetEntry(name, realm, true)
-  if unit then
-    e.class = select(2, UnitClass(unit)) or e.class
-    e.race  = UnitRace(unit) or e.race
-    local lvl = UnitLevel(unit)
-    if lvl and lvl > 0 then e.level = lvl end
-  end
-  local me = UnitName("player")
+  local e, key = self:GetEntry(name, true)
+  if not e then return self:Print("Usage: /gg add <name> <note>") end
+  if unit then self:Learn(e, unit) end
+  local me = self:Me()
   local n = {
     id = me .. "-" .. self:Now() .. "-" .. math.random(1000, 9999),
     author = me, ts = self:Now(), zone = self:Zone(), text = text,
@@ -199,7 +260,7 @@ end
 function GG:DeleteMyNotes(input)
   local e, key = self:Find(input)
   if not e then return self:Print(input, "is not on the list.") end
-  local me, count = UnitName("player"), 0
+  local me, count = self:Me(), 0
   for _, n in pairs(e.notes) do
     if n.author == me and not n.deleted then
       n.deleted, n.ts = true, self:Now()
@@ -215,8 +276,9 @@ function GG:SetBounty(input, reward)
   reward = self:Cut(self:Clean(reward), 100)
   if reward == "" then return self:Print("Usage: /gg bounty <name> <reward>") end
   local e, key = self:Find(input)
-  if not e then e, key = self:GetEntry(input, nil, true) end
-  e.bounty = { poster = UnitName("player"), reward = reward, ts = self:Now(), claimedBy = "", claimedTs = 0 }
+  if not e then e, key = self:GetEntry(input, true) end
+  if not e then return self:Print("Usage: /gg bounty <name> <reward>") end
+  e.bounty = { poster = self:Me(), reward = reward, ts = self:Now(), claimedBy = "", claimedTs = 0 }
   self:SendBounty(key, e, "GUILD")
   self:Print("Bounty posted on", self:ColorName(e) .. ":", reward)
   self:Changed()
@@ -225,7 +287,7 @@ end
 function GG:ClearBounty(input)
   local e, key = self:Find(input)
   if not (e and e.bounty) then return self:Print("No bounty on", input) end
-  e.bounty = { poster = UnitName("player"), reward = "", ts = self:Now(), claimedBy = "", claimedTs = 0 }
+  e.bounty = { poster = self:Me(), reward = "", ts = self:Now(), claimedBy = "", claimedTs = 0 }
   self:SendBounty(key, e, "GUILD")
   self:Print("Bounty removed from", self:ColorName(e))
   self:Changed()
@@ -233,18 +295,20 @@ end
 
 function GG:TryClaim(name, manual)
   local e, key
-  if manual then e, key = self:Find(name) else e, key = self:GetEntry(name, nil, false) end
+  if manual then e, key = self:Find(name) else e, key = self:GetEntry(name, false) end
   local b = e and self:ActiveBounty(e)
   if not b then
     if manual then self:Print("No open bounty on", name) end
     return
   end
-  local me = UnitName("player")
+  local me = self:Me()
   b.claimedBy, b.claimedTs, b.ts = me, self:Now(), self:Now()
   self:SendBounty(key, e, "GUILD")
   self:Print("|cffffd100Bounty claimed!|r", self:ColorName(e), "-", b.reward)
   if self.db.settings.announceClaims and IsInGuild() then
-    SendChatMessage(("[Grudge] %s claimed the bounty on %s: %s"):format(me, e.name, b.reward), "GUILD")
+    -- Forever only has the global SendChatMessage as a deprecation shim.
+    local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
+    send(("[Grudge] %s claimed the bounty on %s: %s"):format(me, e.name, b.reward), "GUILD")
   end
   self:Changed()
 end
@@ -300,6 +364,7 @@ local HELP = {
   "/gg top - most wanted and top bounty hunters",
   "/gg sync | fullsync - pull data from online guildies",
   "/gg alerts | sound | spotted | claims - toggle options",
+  "<name> is the full name: Ana Forever or Ana-Forever (show/del/claim also take just Ana)",
 }
 
 local TOGGLES = { alerts = "alerts", sound = "sound", spotted = "shareSpotted", claims = "announceClaims" }
@@ -315,19 +380,18 @@ SlashCmdList.GUILDGRUDGE = function(msg)
     GG:ToggleUI()
   elseif cmd == "t" or cmd == "target" then
     if not UnitIsPlayer("target") then return GG:Print("Target a player first.") end
-    local name, realm = UnitName("target")
-    GG:AddNote(name, realm, rest, "target")
+    GG:AddNote(GG:UnitFullName("target"), rest, "target")
   elseif cmd == "add" then
-    local name, note = strsplit(" ", rest, 2)
-    if not name or name == "" then return GG:Print("Usage: /gg add <name> <note>") end
-    GG:AddNote(name, nil, note)
+    local name, note = GG:TakeName(rest)
+    if not name then return GG:Print("Usage: /gg add <name> <note>") end
+    GG:AddNote(name, note)
   elseif cmd == "show" then
     GG:Show(rest)
   elseif cmd == "del" or cmd == "remove" then
     GG:DeleteMyNotes(rest)
   elseif cmd == "bounty" then
-    local name, reward = strsplit(" ", rest, 2)
-    GG:SetBounty(name or "", reward)
+    local name, reward = GG:TakeName(rest)
+    GG:SetBounty(name, reward)
   elseif cmd == "unbounty" then
     GG:ClearBounty(rest)
   elseif cmd == "claim" then
