@@ -49,8 +49,6 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 Development notes and tests: see the repo root (`tests/run.lua`, `docs/forever-api-findings.md`).
 
 ## Ideas for later
-- Clickable list rows with an edit box instead of text
-- Minimap button
 - Map pins for "last seen" locations
 - Shared kill counter and seasonal leaderboards
 - Export string for a Discord bot or website
