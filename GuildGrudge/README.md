@@ -23,7 +23,15 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 | `/gg top` | Most wanted and top bounty hunters |
 | `/gg sync` / `/gg fullsync` | Pull updates / everything from online guildies |
 | `/gg alerts`, `sound`, `spotted`, `claims` | Toggle alerts, alert sound, sharing sightings, guild-chat claim announcements |
+| `/gg options` | Open the settings panel |
+| `/gg macro` | Put a `/gg` macro on your cursor, to drop on an action bar |
 | `/gg debug` | Print name formats and sync state, for bug reports |
+
+## Opening the window
+- **Minimap button:** left-click opens the list, right-click opens settings, drag to move it. Turn it off in the settings.
+- **Addon compartment:** the addons button under the clock lists Guild Grudge. Left-click opens the list, right-click opens settings.
+- **Key binding:** Options -> Keybindings -> AddOns -> Guild Grudge.
+- **Macro:** the Macro button in the window (or `/gg macro`) puts a macro on your cursor. Drop it on an action bar.
 
 ## How it works
 - **Storage:** `SavedVariables` (`GuildGrudgeDB`), account-wide, so your alts share the list.

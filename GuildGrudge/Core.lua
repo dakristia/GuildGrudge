@@ -12,6 +12,8 @@ local DEFAULTS = {
   shareSpotted   = true,  -- tell the guild when you spot someone on the list
   announceClaims = true,  -- post in guild chat when you claim a bounty
   alertCooldown  = 60,    -- seconds a player must be out of sight before they can alert you again
+  minimapButton  = true,  -- show the minimap button
+  minimapAngle   = 200,   -- where the minimap button sits, in degrees around the minimap
 }
 
 ---------------------------------------------------------------------------
@@ -406,6 +408,8 @@ local HELP = {
   "/gg debug - print name formats and sync state (for bug reports)",
   "/gg sync | fullsync - pull data from online guildies",
   "/gg alerts | sound | spotted | claims - toggle options",
+  "/gg options - open the settings panel",
+  "/gg macro - put a /gg macro on your cursor",
   "<name> is the full name: Ana Forever or Ana-Forever (show/del/claim also take just Ana)",
 }
 
@@ -444,6 +448,10 @@ SlashCmdList.GUILDGRUDGE = function(msg)
     GG:TryClaim(rest, true)
   elseif cmd == "debug" then
     GG:Debug()
+  elseif cmd == "options" or cmd == "config" then
+    GG:OpenSettings()
+  elseif cmd == "macro" then
+    GG:MakeMacro()
   elseif cmd == "top" then
     GG:Top()
   elseif cmd == "sync" or cmd == "fullsync" then

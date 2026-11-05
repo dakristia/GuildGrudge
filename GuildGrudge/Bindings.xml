@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="GUILDGRUDGE_TOGGLE" header="GUILDGRUDGE" category="ADDONS">
+		GuildGrudge:ToggleUI()
+	</Binding>
+</Bindings>
