@@ -139,7 +139,8 @@ for i = 1, 40 do PORTRAIT_UNITS[#PORTRAIT_UNITS + 1] = "nameplate" .. i end
 local function FindUnit(key)
   if not UnitExists or not UnitIsPlayer then return nil end
   for _, token in ipairs(PORTRAIT_UNITS) do
-    if UnitExists(token) and UnitIsPlayer(token) then
+    -- A unit whose model is not loaded yet draws a black portrait, so it must be visible too.
+    if UnitExists(token) and UnitIsPlayer(token) and (not UnitIsVisible or UnitIsVisible(token)) then
       local full = GG:UnitFullName(token)
       if full and GG:MakeKey(full) == key then return token end
     end
