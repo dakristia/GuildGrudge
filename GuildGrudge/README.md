@@ -1,4 +1,4 @@
-# Guild Grudge (v0.2.0, not yet tested in game)
+# Guild Grudge (v0.2.1)
 
 A shared kill-on-sight list for your guild: notes on gankers, fictive bounties, guild sync and an alert when a listed player shows up near you. Built for World of Warcraft: Forever (interface 16001).
 
