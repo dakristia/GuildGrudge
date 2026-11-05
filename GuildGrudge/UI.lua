@@ -416,10 +416,47 @@ local function Relayout(d, hasButtons)
   d.notesSec:SetPoint("BOTTOMRIGHT", d, "BOTTOMRIGHT", 0, hasButtons and 38 or 10)
 end
 
+-- A portrait can only be drawn for a unit that exists right now, so look for one the player can see.
+local PORTRAIT_UNITS = { "target", "focus", "mouseover" }
+for i = 1, 40 do PORTRAIT_UNITS[#PORTRAIT_UNITS + 1] = "nameplate" .. i end
+
+local function FindUnit(key)
+  if not UnitExists or not UnitIsPlayer then return nil end
+  for _, token in ipairs(PORTRAIT_UNITS) do
+    if UnitExists(token) and UnitIsPlayer(token) then
+      local full = GG:UnitFullName(token)
+      if full and GG:MakeKey(full) == key then return token end
+    end
+  end
+end
+
+-- Without a visible unit (or without SetPortraitTexture) the class icon stays, as before.
+local function UpdatePortrait(d)
+  local e = d.entry
+  local token = e and SetPortraitTexture and FindUnit(GG:MakeKey(e.name))
+  if token then
+    SetPortraitTexture(d.portrait, token)
+    d.portrait:Show()
+    d.icon:Hide()
+    -- The portrait already hides the class, so the badge adds it back; an unknown class gets no badge.
+    if e.class then
+      SetClassIcon(d.badge, e)
+      d.badge:Show()
+    else
+      d.badge:Hide()
+    end
+  else
+    d.portrait:Hide()
+    d.badge:Hide()
+    d.icon:Show()
+  end
+end
+
 local function UpdateDetailPlayer(d, el)
   local e, b = el.e, el.bounty
   d.entry = e
   SetClassIcon(d.icon, e)
+  UpdatePortrait(d)
   d.name:SetText(e.name)
   d.name:SetTextColor(ClassRGB(e))
   d.info:SetText(strtrim(("%s %s %s"):format(
@@ -450,6 +487,7 @@ end
 local function UpdateDetailHunter(d, el)
   d.entry = nil
   d.icon:SetAtlas("friends-icon-favorites")
+  UpdatePortrait(d)
   d.name:SetText(el.name)
   SetHunterColor(d.name, el.name)
   d.info:SetText(el.count == 1 and "1 bounty claimed" or (el.count .. " bounties claimed"))
@@ -566,6 +604,15 @@ local function CreateHeader(d)
   d.icon = h:CreateTexture(nil, "ARTWORK")
   d.icon:SetSize(40, 40)
   d.icon:SetPoint("TOPLEFT", PAD, -PAD)
+  d.portrait = h:CreateTexture(nil, "ARTWORK")
+  d.portrait:SetSize(40, 40)
+  d.portrait:SetPoint("TOPLEFT", PAD, -PAD)
+  d.portrait:Hide()
+  -- OVERLAY draws above ARTWORK, so the badge sits on top of the portrait corner.
+  d.badge = h:CreateTexture(nil, "OVERLAY")
+  d.badge:SetSize(16, 16)
+  d.badge:SetPoint("TOPRIGHT", d.portrait, "TOPRIGHT", 4, 4)
+  d.badge:Hide()
   d.name = h:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
   d.name:SetPoint("TOPLEFT", d.icon, "TOPRIGHT", 8, -2)
   d.name:SetWidth(CONTENT_W - 48)
@@ -821,6 +868,16 @@ local function Build()
   BuildTabs(f)
 
   f:SetScript("OnShow", function() GG:RefreshUI() end)
+
+  -- Only the portrait depends on these events, so the list is not rebuilt.
+  local watcher = CreateFrame("Frame")
+  for _, event in ipairs({ "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UPDATE_MOUSEOVER_UNIT",
+    "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_PORTRAIT_UPDATE" }) do
+    pcall(watcher.RegisterEvent, watcher, event)
+  end
+  watcher:SetScript("OnEvent", function()
+    if f:IsShown() and f.detail.entry then UpdatePortrait(f.detail) end
+  end)
   f:Hide()
   return f
 end
