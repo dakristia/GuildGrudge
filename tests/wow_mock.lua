@@ -6,7 +6,7 @@ local M = {}
 M.now = 1000            -- GetTime() clock, shared by all clients
 M.serverTime = 1800000000
 M.clients = {}
-M.log = { sent = 0, throttled = 0, tooLong = 0, delivered = 0 }
+M.log = { sent = 0, throttled = 0, tooLong = 0, delivered = 0, types = {} } -- types = messages sent per type letter
 
 -- Throttle as documented for 10.2.7+: 10 messages per prefix, +1 per second.
 local THROTTLE_MAX, THROTTLE_REGEN = 10, 1
@@ -205,6 +205,8 @@ end
 
 function M.send(c, prefix, msg, channel, target)
   M.log.sent = M.log.sent + 1
+  local kind = msg:sub(1, 1)
+  M.log.types[kind] = (M.log.types[kind] or 0) + 1
   if #msg > 255 then M.log.tooLong = M.log.tooLong + 1; return 2 end
   local th = c.throttle[prefix] or { left = THROTTLE_MAX, at = M.now }
   th.left = math.min(THROTTLE_MAX, th.left + (M.now - th.at) * THROTTLE_REGEN)
@@ -256,7 +258,7 @@ function M.slash(c, msg) c.env.SlashCmdList.GUILDGRUDGE(msg) end
 function M.reset()
   M.clients = {}
   M.guids = {}
-  M.log = { sent = 0, throttled = 0, tooLong = 0, delivered = 0 }
+  M.log = { sent = 0, throttled = 0, tooLong = 0, delivered = 0, types = {} }
   M.guildChat = {}
 end
 

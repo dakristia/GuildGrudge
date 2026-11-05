@@ -153,6 +153,7 @@ end
 -- GuildGrudgeDB.entries[key] = {        -- key = lowercase full name
 --   name, class, race, level,           -- name = "First Surname" (or "Name-Realm")
 --   raceFile, sex,                      -- raceFile = 2nd return of UnitRace ("Scourge"); sex = 2 male | 3 female
+--   profileTs,                          -- when class, race, raceFile, sex or level last changed; newer wins when syncing
 --   lastSeen, lastSeenZone, lastSeenBy,
 --   notes  = { [id] = { id, author, ts, zone, text, deleted,
 --                       votes = { [voterFullName] = { v = 1 | -1 | 0, ts } } } },  -- 0 = vote removed, kept so it syncs
@@ -210,6 +211,7 @@ function GG:Learn(e, unit)
   local lvl, guid = UnitLevel(unit), UnitGUID(unit)
   local sex = UnitSex and UnitSex(unit)
   if self:Secret(class, race, raceFile, lvl, guid, sex) then return end
+  local oc, orc, orf, os, ol = e.class, e.race, e.raceFile, e.sex, e.level
   e.class = class or e.class
   e.race  = race or e.race
   e.raceFile = raceFile or e.raceFile
@@ -217,6 +219,12 @@ function GG:Learn(e, unit)
   if sex == 2 or sex == 3 then e.sex = sex end
   if lvl and lvl > 0 then e.level = lvl end
   if guid then self.seenGUIDs[guid] = e.name end
+  -- Entries learned before profiles synced have data but no profileTs, so they count as changed once.
+  local unshared = not e.profileTs and e.raceFile
+  if unshared or oc ~= e.class or orc ~= e.race or orf ~= e.raceFile or os ~= e.sex or ol ~= e.level then
+    e.profileTs = self:Now()
+    if self.ShareProfile then self:ShareProfile(e) end
+  end
 end
 
 function GG:NoteScore(n)
@@ -283,6 +291,7 @@ function GG:MaxTs()
       end
     end
     if e.bounty and e.bounty.ts > max then max = e.bounty.ts end
+    if (e.profileTs or 0) > max then max = e.profileTs end
   end
   return max
 end

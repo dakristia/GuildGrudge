@@ -426,5 +426,74 @@ test("after a roster update AuthorClass returns the guildie's class", function()
   noErrors(a); noErrors(b)
 end)
 
+---------------------------------------------------------------------------
+-- Profile sync (class, race, sex, level)
+---------------------------------------------------------------------------
+local function sight(c, unit)
+  c.units = { nameplate1 = unit }
+  W.fire(c, "NAME_PLATE_UNIT_ADDED", "nameplate1")
+end
+local ana = { name = "Gankmaster", race = "Undead", raceFile = "Scourge", sex = 3, level = 42, class = "MAGE" }
+
+test("a sighting of a listed player shares race, sex and level with a guildie", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  sight(a, ana)
+  W.advance(2)
+  local e = b.ns.db.entries["gankmaster"]
+  eq(e.raceFile, "Scourge"); eq(e.race, "Undead"); eq(e.sex, 3); eq(e.level, 42); eq(e.class, "MAGE")
+  assert(e.profileTs, "profileTs set")
+  noErrors(a); noErrors(b)
+end)
+
+test("a guildie who logs in later gets the profile through the login dump", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  sight(a, ana)
+  W.advance(2)
+  local d = W.newClient({ name = "Newbie", realm = "Realm" })
+  W.login(d)
+  W.advance(40)
+  local e = d.ns.db.entries["gankmaster"]
+  assert(e, "newcomer has the entry")
+  eq(e.raceFile, "Scourge"); eq(e.sex, 3); eq(e.level, 42)
+  noErrors(d)
+end)
+
+test("a second sighting within 300 seconds sends no new profile", function()
+  local a = guild(2)[1]
+  W.slash(a, "add Gankmaster rude")
+  W.advance(30) -- past the login sync, which would add dumps to the count
+  sight(a, ana)
+  W.advance(2)
+  eq(W.log.types.P, 1, "profiles after first sighting")
+  sight(a, { name = "Gankmaster", race = "Undead", raceFile = "Scourge", sex = 3, level = 43, class = "MAGE" })
+  W.advance(2)
+  eq(W.log.types.P, 1, "profiles after second sighting")
+  W.advance(301)
+  sight(a, { name = "Gankmaster", race = "Undead", raceFile = "Scourge", sex = 3, level = 44, class = "MAGE" })
+  W.advance(2)
+  eq(W.log.types.P, 2, "profiles after the cooldown")
+end)
+
+test("an older profile does not overwrite newer local data", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  sight(a, ana)
+  W.advance(2)
+  local e = b.ns.db.entries["gankmaster"]
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "P^1^gankmaster^Gankmaster^^PRIEST^Orc^Orc^2^10^" .. (W.serverTime - 1000), "GUILD")
+  eq(e.raceFile, "Scourge"); eq(e.level, 42); eq(e.class, "MAGE")
+  -- a newer one with empty fields only updates what it carries
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "P^1^gankmaster^Gankmaster^^^^^^50^" .. (W.serverTime + 100), "GUILD")
+  eq(e.level, 50); eq(e.raceFile, "Scourge"); eq(e.class, "MAGE")
+  noErrors(b)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

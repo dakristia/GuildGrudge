@@ -5,6 +5,7 @@
 --   B^1^key^name^^poster^ts^claimedBy^claimedTs^reward      a bounty (posted, claimed or removed)
 --   V^1^key^name^^noteId^voter^v^ts                         a vote on a note (v = 1, -1 or 0 for removed)
 --   S^1^key^name^^class^zone                                "I just spotted this player"
+--   P^1^key^name^^class^raceFile^race^sex^level^ts          a player's class, race, sex and level (newest ts wins)
 --   H^1^since                                               "send me everything newer than <since>"
 --   D^1^requester                                           "I'm answering that request, others can relax"
 -- The empty fifth field used to be the realm. Receivers rebuild the key from name.
@@ -16,6 +17,8 @@ local roster = {}       -- guild members, as GG:Who() spells them
 local rosterClass = {}  -- guild members -> class file name
 local handled = {}      -- requester -> time someone started answering them
 local lastSpotMsg = {}  -- key -> time we last printed a "spotted" message from a guildie
+local lastProfileSend = {} -- key -> time we last sent a profile (P) for it
+local PROFILE_INTERVAL = 300
 
 local function join(...)
   local t = {}
@@ -79,6 +82,19 @@ function GG:SendSpotted(key, e, zone)
   self:Send(join("S", PROTO, key, e.name, "", e.class, zone), "GUILD")
 end
 
+function GG:SendProfile(key, e, channel, target)
+  self:Send(join("P", PROTO, key, e.name, "", e.class, e.raceFile, e.race, e.sex, e.level, e.profileTs), channel, target)
+end
+
+-- Called by GG:Learn when a profile field changed. Nameplates re-learn constantly, so send at most once per interval.
+function GG:ShareProfile(e)
+  if not (self:IsListed(e) and IsInGuild()) then return end
+  local key = self:MakeKey(e.name)
+  if lastProfileSend[key] and GetTime() - lastProfileSend[key] < PROFILE_INTERVAL then return end
+  lastProfileSend[key] = GetTime()
+  self:SendProfile(key, e, "GUILD")
+end
+
 function GG:RequestSync(full)
   -- Ask for a day of overlap so small gaps heal themselves.
   local since = full and 0 or math.max(0, self:MaxTs() - 86400)
@@ -91,6 +107,8 @@ function GG:DumpTo(target, since)
       if n.ts > since then self:SendNote(key, e, n, "WHISPER", target) end
     end
     if e.bounty and e.bounty.ts > since then self:SendBounty(key, e, "WHISPER", target) end
+    -- Profiles go after the notes, because the receiver ignores profiles of players it doesn't know.
+    if (e.profileTs or 0) > since then self:SendProfile(key, e, "WHISPER", target) end
     -- Votes go after the notes, because the receiver ignores votes on notes it doesn't know.
     for _, n in pairs(e.notes) do
       for voter, vote in pairs(n.votes or {}) do
@@ -154,7 +172,22 @@ handlers.V = function(t)
   GG:Changed()
 end
 
-handlers.S = function(t, channel, sender)
+handlers.P = function(t)
+  local e = GG:GetEntry(t[4], false)
+  local ts = tonumber(t[11])
+  if not e or not ts or ts <= (e.profileTs or 0) then return end
+  -- Empty fields never overwrite what we know.
+  if nz(t[6]) then e.class = t[6] end
+  if nz(t[7]) then e.raceFile = t[7] end
+  if nz(t[8]) then e.race = t[8] end
+  local sex, level = tonumber(t[9]), tonumber(t[10])
+  if sex == 2 or sex == 3 then e.sex = sex end
+  if level and level > 0 then e.level = level end
+  e.profileTs = ts
+  GG:Changed()
+end
+
+handlers.S =function(t, channel, sender)
   local e, key = GG:GetEntry(t[4], false)
   if not e or not GG:IsListed(e) then return end
   if nz(t[6]) and not e.class then e.class = t[6] end
