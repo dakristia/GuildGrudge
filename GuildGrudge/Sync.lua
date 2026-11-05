@@ -160,9 +160,10 @@ end
 
 function GG:OnAddonMessage(prefix, msg, channel, sender)
   if prefix ~= self.PREFIX or not self.db then return end
+  -- Recorded before the self-check so one account can see its own echo in /gg debug.
+  self.lastSender = sender
   local who = self:Who(sender)
   if not who or who == self:Me() then return end
-  self.lastSender = sender -- raw, for /gg debug
   -- Only listen to guildies (guild channel, or whispers from roster members).
   if channel ~= "GUILD" and not roster[who] then return end
   local t = { strsplit(SEP, msg) }
