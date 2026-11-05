@@ -1305,10 +1305,12 @@ local MENU_TAGS = { "MENU_UNIT_TARGET", "MENU_UNIT_PLAYER", "MENU_UNIT_ENEMY_PLA
 local function AddUnitMenuItems(_, root, ctx)
   if not ctx or not GG.db then return end
   local unit, name = ctx.unit, nil
-  if unit and UnitIsPlayer(unit) then
+  -- A mob or NPC has a unit but is not a player, so it gets no Guild Grudge items.
+  -- Menus without a unit (chat names, the friends list) only carry a name.
+  if unit then
+    if not UnitIsPlayer(unit) then return end
     name = GG:UnitFullName(unit)
   elseif ctx.name then
-    unit = nil
     name = GG:FullName(ctx.name, ctx.surname)
   end
   if not name or name == GG:Me() then return end
