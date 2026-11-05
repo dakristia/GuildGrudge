@@ -2,7 +2,7 @@
 ## Title: Guild Grudge
 ## Notes: Shared guild kill-on-sight list with notes, bounties and proximity alerts.
 ## Author: Your Guild
-## Version: 0.2.1
+## Version: 0.3.0
 ## SavedVariables: GuildGrudgeDB
 ## IconTexture: Interface\Icons\Ability_Hunter_SniperShot
 ## AddonCompartmentFunc: GuildGrudge_OnCompartmentClick
