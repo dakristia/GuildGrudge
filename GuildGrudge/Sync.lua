@@ -3,6 +3,7 @@
 -- Message formats (fields separated by ^, first field = type, second = protocol version):
 --   N^1^key^name^^class^id^author^ts^deleted^zone^text      a note (new, edited or deleted)
 --   B^1^key^name^^poster^ts^claimedBy^claimedTs^reward      a bounty (posted, claimed or removed)
+--   V^1^key^name^^noteId^voter^v^ts                         a vote on a note (v = 1, -1 or 0 for removed)
 --   S^1^key^name^^class^zone                                "I just spotted this player"
 --   H^1^since                                               "send me everything newer than <since>"
 --   D^1^requester                                           "I'm answering that request, others can relax"
@@ -12,6 +13,7 @@ local ADDON, GG = ...
 local SEP, PROTO = "^", "1"
 local queue, ticker = {}, nil
 local roster = {}       -- guild members, as GG:Who() spells them
+local rosterClass = {}  -- guild members -> class file name
 local handled = {}      -- requester -> time someone started answering them
 local lastSpotMsg = {}  -- key -> time we last printed a "spotted" message from a guildie
 
@@ -68,6 +70,11 @@ function GG:SendBounty(key, e, channel, target)
   self:Send(head .. self:Cut(b.reward, 250 - #head), channel, target)
 end
 
+function GG:SendVote(key, e, n, voter, channel, target)
+  local vote = n.votes[voter]
+  self:Send(join("V", PROTO, key, e.name, "", n.id, voter, vote.v, vote.ts), channel, target)
+end
+
 function GG:SendSpotted(key, e, zone)
   self:Send(join("S", PROTO, key, e.name, "", e.class, zone), "GUILD")
 end
@@ -84,6 +91,12 @@ function GG:DumpTo(target, since)
       if n.ts > since then self:SendNote(key, e, n, "WHISPER", target) end
     end
     if e.bounty and e.bounty.ts > since then self:SendBounty(key, e, "WHISPER", target) end
+    -- Votes go after the notes, because the receiver ignores votes on notes it doesn't know.
+    for _, n in pairs(e.notes) do
+      for voter, vote in pairs(n.votes or {}) do
+        if vote.ts > since then self:SendVote(key, e, n, voter, "WHISPER", target) end
+      end
+    end
   end
 end
 
@@ -126,6 +139,19 @@ handlers.B = function(t, channel, sender)
     end
     GG:Changed()
   end
+end
+
+handlers.V = function(t)
+  local e = GG:GetEntry(t[4], false)
+  local n = e and e.notes[t[6]]
+  local voter, v, ts = nz(t[7]), tonumber(t[8]), tonumber(t[9])
+  if not n or not voter or not ts or (v ~= 1 and v ~= -1 and v ~= 0) then return end
+  if voter == n.author then return end
+  n.votes = n.votes or {}
+  local old = n.votes[voter]
+  if old and old.ts >= ts then return end
+  n.votes[voter] = { v = v, ts = ts }
+  GG:Changed()
 end
 
 handlers.S = function(t, channel, sender)
@@ -176,11 +202,21 @@ end
 
 function GG:UpdateRoster()
   wipe(roster)
+  wipe(rosterClass)
   for i = 1, GetNumGuildMembers() do
-    local name = GetGuildRosterInfo(i)
+    local name, _, _, _, _, _, _, _, _, _, classFile = GetGuildRosterInfo(i)
     local who = name and self:Who(name)
-    if who then roster[who] = true end
+    if who then
+      roster[who] = true
+      rosterClass[who] = classFile
+    end
   end
+end
+
+-- Class file name ("MAGE") of a guildie or ourselves, nil if unknown.
+function GG:AuthorClass(name)
+  if name and name == self:Me() then return (select(2, UnitClass("player"))) end
+  return name and rosterClass[name] or nil
 end
 
 function GG:InitSync()

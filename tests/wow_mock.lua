@@ -56,6 +56,7 @@ function M.newClient(opts)
   c.full = opts.full or (opts.surname and (opts.name .. " " .. opts.surname))
         or (opts.name .. (opts.realm and ("-" .. opts.realm) or ""))
   c.guid = "Player-" .. c.full
+  c.class = opts.class or "WARRIOR"
   -- How the server spells this character in chat events and the guild roster.
   -- The live client sends "Ana Smith" for whispers and the roster. Tests still try "Ana-Smith" too.
   c.wire = opts.wire or c.full
@@ -108,7 +109,10 @@ function M.newClient(opts)
     GetSubZoneText = function() return opts.subzone or "" end,
     IsInGuild = function() return true end,
     GetNumGuildMembers = function() return #M.clients end,
-    GetGuildRosterInfo = function(i) return M.clients[i] and M.clients[i].wire end,
+    GetGuildRosterInfo = function(i)
+      local o = M.clients[i]
+      if o then return o.wire, nil, nil, nil, nil, nil, nil, nil, nil, nil, o.class end
+    end,
     -- The real call answers asynchronously with GUILD_ROSTER_UPDATE.
     C_GuildInfo = { GuildRoster = function()
       table.insert(c.timers, { at = M.now + 0.5, fn = function() M.fire(c, "GUILD_ROSTER_UPDATE") end })
@@ -121,7 +125,10 @@ function M.newClient(opts)
     end,
     UnitIsPlayer = function(unit) return unit == "player" or (c.units and c.units[unit] ~= nil) end,
     UnitExists = function(unit) return unit == "player" or (c.units and c.units[unit] ~= nil) end,
-    UnitClass = function(unit) local u = c.units and c.units[unit]; if u then return u.class, u.class end end,
+    UnitClass = function(unit)
+      if unit == "player" then return c.class, c.class end
+      local u = c.units and c.units[unit]; if u then return u.class, u.class end
+    end,
     UnitRace = function(unit) local u = c.units and c.units[unit]; return u and u.race end,
     UnitLevel = function(unit) local u = c.units and c.units[unit]; return u and u.level or 0 end,
     UnitGUID = function(unit)

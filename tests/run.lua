@@ -314,5 +314,106 @@ test("Forever combat log: nameplate alerts use the new raid-warning API", functi
   noErrors(a)
 end)
 
+---------------------------------------------------------------------------
+-- Note votes
+---------------------------------------------------------------------------
+local function firstNote(c, key)
+  return c.ns:SortedNotes(c.ns.db.entries[key])[1]
+end
+
+test("a vote syncs to a second online guildie and changes its score", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  local id = firstNote(a, "gankmaster").id
+  b.ns:Vote("Gankmaster", id, 1)
+  W.advance(2)
+  eq(a.ns:NoteScore(a.ns.db.entries["gankmaster"].notes[id]), 1, "A score")
+  eq(b.ns:MyVote(b.ns.db.entries["gankmaster"].notes[id]), 1, "B own vote")
+  eq(a.ns:MyVote(a.ns.db.entries["gankmaster"].notes[id]), 0, "A has not voted")
+  noErrors(a); noErrors(b)
+end)
+
+test("a guildie who logs in later receives votes through the login dump", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  local id = firstNote(a, "gankmaster").id
+  b.ns:Vote("Gankmaster", id, -1)
+  W.advance(2)
+  local d = W.newClient({ name = "Newbie", realm = "Realm" })
+  W.login(d)
+  W.advance(40)
+  local n = d.ns.db.entries["gankmaster"].notes[id]
+  eq(d.ns:NoteScore(n), -1, "newcomer score")
+  noErrors(d)
+end)
+
+test("the newer vote per voter wins and a 0 vote removes the effect", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  local id = firstNote(a, "gankmaster").id
+  local an = a.ns.db.entries["gankmaster"].notes[id]
+  b.ns:Vote("Gankmaster", id, 1)
+  W.advance(2)
+  eq(a.ns:NoteScore(an), 1, "after up")
+  b.ns:Vote("Gankmaster", id, -1)
+  W.advance(2)
+  eq(a.ns:NoteScore(an), -1, "after down")
+  -- an older vote arriving late must not win
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "V^1^gankmaster^Gankmaster^^" .. id .. "^Player2^1^" .. (W.serverTime - 100), "GUILD")
+  b.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "V^1^gankmaster^Gankmaster^^" .. id .. "^Player2^1^" .. (W.serverTime - 100), "GUILD")
+  eq(a.ns:NoteScore(an), -1, "stale vote ignored")
+  b.ns:Vote("Gankmaster", id, 0)
+  W.advance(2)
+  eq(a.ns:NoteScore(an), 0, "after removal")
+  eq(an.votes["Player2"].v, 0, "removal record kept")
+  noErrors(a); noErrors(b)
+end)
+
+test("voting on your own note is refused and sends nothing", function()
+  local a = guild(2)[1]
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  local id = firstNote(a, "gankmaster").id
+  local sent = W.log.sent
+  a.chat = {}
+  a.ns:Vote("Gankmaster", id, 1)
+  W.advance(2)
+  eq(W.log.sent, sent, "messages sent")
+  assert(table.concat(a.chat, " "):find("You can't vote on your own note.", 1, true), "message: " .. table.concat(a.chat, " / "))
+  eq(a.ns:NoteScore(a.ns.db.entries["gankmaster"].notes[id]), 0, "score")
+end)
+
+test("SortedNotes orders by score, then newest on a tie", function()
+  local a = guild(1)[1]
+  local e = a.ns:GetEntry("Gankmaster", true)
+  e.notes.old  = { id = "old",  author = "X", ts = 10, text = "old",  votes = {} }
+  e.notes.new  = { id = "new",  author = "X", ts = 20, text = "new",  votes = {} }
+  e.notes.best = { id = "best", author = "X", ts = 5,  text = "best", votes = { Y = { v = 1, ts = 6 } } }
+  e.notes.bad  = { id = "bad",  author = "X", ts = 30, text = "bad",  votes = { Y = { v = -1, ts = 31 } } }
+  local ids = {}
+  for i, n in ipairs(a.ns:SortedNotes(e)) do ids[i] = n.id end
+  eq(table.concat(ids, ","), "best,new,old,bad")
+end)
+
+---------------------------------------------------------------------------
+-- Author class colours
+---------------------------------------------------------------------------
+test("after a roster update AuthorClass returns the guildie's class", function()
+  local a = W.newClient({ name = "Player1", realm = "Realm", class = "MAGE" })
+  W.login(a)
+  local b = W.newClient({ name = "Player2", realm = "Realm", class = "PRIEST" })
+  W.login(b)
+  W.advance(2)
+  eq(a.ns:AuthorClass("Player2"), "PRIEST", "guildie class")
+  eq(a.ns:AuthorClass("Player1"), "MAGE", "own class")
+  eq(a.ns:AuthorClass("Nobody"), nil, "unknown")
+  noErrors(a); noErrors(b)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

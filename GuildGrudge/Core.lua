@@ -153,7 +153,8 @@ end
 -- GuildGrudgeDB.entries[key] = {        -- key = lowercase full name
 --   name, class, race, level,           -- name = "First Surname" (or "Name-Realm")
 --   lastSeen, lastSeenZone, lastSeenBy,
---   notes  = { [id] = { id, author, ts, zone, text, deleted } },
+--   notes  = { [id] = { id, author, ts, zone, text, deleted,
+--                       votes = { [voterFullName] = { v = 1 | -1 | 0, ts } } } },  -- 0 = vote removed, kept so it syncs
 --   bounty = { poster, reward, ts, claimedBy, claimedTs }   -- ts = last change
 -- }
 ---------------------------------------------------------------------------
@@ -212,12 +213,28 @@ function GG:Learn(e, unit)
   if guid then self.seenGUIDs[guid] = e.name end
 end
 
+function GG:NoteScore(n)
+  local score = 0
+  for _, vote in pairs(n.votes or {}) do score = score + vote.v end
+  return score
+end
+
+function GG:MyVote(n)
+  local vote = n.votes and n.votes[self:Me()]
+  return vote and vote.v or 0
+end
+
+-- Best note first: highest score, and the newest note wins a tie.
 function GG:SortedNotes(e)
   local list = {}
   for _, n in pairs(e.notes) do
     if not n.deleted then list[#list + 1] = n end
   end
-  table.sort(list, function(a, b) return a.ts > b.ts end)
+  table.sort(list, function(a, b)
+    local sa, sb = self:NoteScore(a), self:NoteScore(b)
+    if sa ~= sb then return sa > sb end
+    return a.ts > b.ts
+  end)
   return list
 end
 
@@ -237,6 +254,8 @@ end
 function GG:MergeNote(e, n)
   local old = e.notes[n.id]
   if old and old.ts >= n.ts then return false end
+  -- Notes arrive without votes, so a newer version keeps the votes we have.
+  if old and not n.votes then n.votes = old.votes end
   e.notes[n.id] = n
   return true
 end
@@ -253,6 +272,9 @@ function GG:MaxTs()
   for _, e in pairs(self.db.entries) do
     for _, n in pairs(e.notes) do
       if n.ts > max then max = n.ts end
+      for _, vote in pairs(n.votes or {}) do
+        if vote.ts > max then max = vote.ts end
+      end
     end
     if e.bounty and e.bounty.ts > max then max = e.bounty.ts end
   end
@@ -280,6 +302,20 @@ function GG:AddNote(name, text, unit)
   e.notes[n.id] = n
   self:SendNote(key, e, n, "GUILD")
   self:Print("Added", self:ColorName(e) .. ":", text)
+  self:Changed()
+end
+
+-- value: 1 (up), -1 (down) or 0 (take the vote back)
+function GG:Vote(name, noteId, value)
+  local e, key, ambiguous = self:Find(name)
+  if not e then return self:NotFound(name, ambiguous) end
+  local n = e.notes[noteId]
+  if not n or n.deleted then return self:Print("That note is gone.") end
+  local me = self:Me()
+  if n.author == me then return self:Print("You can't vote on your own note.") end
+  n.votes = n.votes or {}
+  n.votes[me] = { v = value, ts = self:Now() }
+  self:SendVote(key, e, n, me, "GUILD")
   self:Changed()
 end
 
