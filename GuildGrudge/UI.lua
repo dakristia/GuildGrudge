@@ -105,6 +105,7 @@ local function Tip(button, text)
 end
 
 local ICON = "Interface\\Icons\\"
+local RAID_ICONS = "Interface\\TargetingFrame\\UI-RaidTargetingIcons"
 local CLASS_CIRCLES = "Interface\\TargetingFrame\\UI-Classes-Circles"
 local TABS = { "Wanted", "Bounties", "Hunters" }
 local EMPTY_TEXT = {
@@ -132,8 +133,33 @@ local function SetClassIcon(tex, e)
 end
 
 -- Bounties are free text, so a skull marks them instead of a gold coin.
+-- SetRaidTargetIconTexture only sets the texture coordinates, so the sheet is set first, as the nameplate XML does.
 local function SetSkull(tex)
-  if SetRaidTargetIconTexture then SetRaidTargetIconTexture(tex, 8) end
+  tex:SetTexture(RAID_ICONS)
+  if SetRaidTargetIconTexture then
+    SetRaidTargetIconTexture(tex, 8)
+  else
+    tex:SetTexCoord(0.75, 1, 0.25, 0.5)
+  end
+end
+
+-- The class colour of a player who has posted a note or claimed a bounty, or nil when unknown.
+local function AuthorColor(name)
+  local class = name and GG.AuthorClass and GG:AuthorClass(name)
+  return class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class] or nil
+end
+
+-- Colours a name inside a FontString text. Unknown players keep the grey of the surrounding font.
+local function ColoredName(name)
+  local c = AuthorColor(name)
+  if not c then return name end
+  local str = c.colorStr or ("ff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255)
+  return ("|c%s%s|r"):format(str, name)
+end
+
+local function SetHunterColor(fs, name)
+  local c = AuthorColor(name)
+  if c then fs:SetTextColor(c.r, c.g, c.b) else fs:SetTextColor(1, 0.82, 0) end
 end
 
 local function Plural(n, word)
@@ -254,7 +280,7 @@ local function SetRowHunter(row, data)
   row.icon:Hide()
   row.hunterIcon:Show()
   row.name:SetText(("%d. %s"):format(data.index, data.name))
-  row.name:SetTextColor(1, 0.82, 0)
+  SetHunterColor(row.name, data.name)
   row.info:SetText("")
   row.note:SetWidth(250)
   row.note:SetText(data.count == 1 and "1 bounty claimed" or (data.count .. " bounties claimed"))
@@ -302,6 +328,10 @@ local DETAIL_W = 296
 local PAD = 10
 local CONTENT_W = DETAIL_W - 2 * PAD
 local NOTE_W = 256 -- the note list is 264 wide, minus 4px of padding on each side
+local VOTE_W = 24 -- the right edge of a note block belongs to the vote control
+local TEXT_W = NOTE_W - VOTE_W
+local STAR_W = 16 -- the first place star shifts that note's text right
+local ARROW_UP, ARROW_DOWN = "minimal-scrollbar-arrow-top", "minimal-scrollbar-arrow-bottom"
 
 local function SetShown(widgets, shown)
   for _, w in ipairs(widgets) do w:SetShown(shown) end
@@ -313,17 +343,42 @@ local function TextHeight(fs, text)
   return fs:GetStringHeight() or 0
 end
 
-local function NoteBlock(d, text, meta)
+-- opts: voting (reserve the vote column), first (star before the text), plus the vote fields for InitNote.
+local function NoteBlock(d, text, meta, opts)
+  opts = opts or {}
+  local textW = opts.voting and TEXT_W or NOTE_W
+  if opts.first then textW = textW - STAR_W end
+  d.measureText:SetWidth(textW)
+  d.measureMeta:SetWidth(opts.voting and TEXT_W or NOTE_W)
   local height = TextHeight(d.measureText, text) + TextHeight(d.measureMeta, meta ~= "" and meta or "X") + 8
-  return { text = text, meta = meta, height = height }
+  -- The up arrow, score and down arrow need about 32px.
+  if opts.voting then height = math.max(height, 32) end
+  local block = { text = text, meta = meta, height = height }
+  for k, v in pairs(opts) do block[k] = v end
+  return block
 end
 
-local function PlayerBlocks(d, notes)
+local function NoteScore(n)
+  return GG.NoteScore and GG:NoteScore(n) or 0
+end
+
+local function PlayerBlocks(d, e, notes)
   local blocks = {}
-  for _, n in ipairs(notes) do
-    local parts = { n.author, GG:Age(n.ts) }
+  local me = GG:Me()
+  local voting = GG.Vote ~= nil
+  for i, n in ipairs(notes) do
+    local parts = { ColoredName(n.author), GG:Age(n.ts) }
     if n.zone and n.zone ~= "" then parts[#parts + 1] = n.zone end
-    blocks[#blocks + 1] = NoteBlock(d, n.text, table.concat(parts, " - "))
+    local score = NoteScore(n)
+    blocks[#blocks + 1] = NoteBlock(d, n.text, table.concat(parts, " - "), {
+      voting = voting,
+      entryName = e.name,
+      note = n,
+      score = score,
+      myVote = GG.MyVote and GG:MyVote(n) or 0,
+      own = n.author == me,
+      first = i == 1 and #notes >= 2 and score > 0,
+    })
   end
   if #blocks == 0 then blocks[1] = NoteBlock(d, "No notes.", "") end
   return blocks
@@ -345,7 +400,7 @@ local function SetNotes(d, heading, blocks)
     block.index = i
     dp:Insert(block)
   end
-  d.notesBox:SetDataProvider(dp)
+  d.notesBox:SetDataProvider(dp, ScrollBoxConstants.RetainScrollPosition)
 end
 
 -- Each visible section hangs below the one above it, so a hidden section leaves no gap.
@@ -374,19 +429,19 @@ local function UpdateDetailPlayer(d, el)
   d.bountySec:SetShown((b or claimed) and true or false)
   if b then
     d.reward:SetText(b.reward)
-    d.bountyMeta:SetText("Posted by " .. b.poster)
+    d.bountyMeta:SetText("Posted by " .. ColoredName(b.poster))
   elseif claimed then
     d.reward:SetText(claimed.reward)
-    d.bountyMeta:SetText(("Claimed by %s, %s"):format(claimed.claimedBy, GG:Age(claimed.claimedTs)))
+    d.bountyMeta:SetText(("Claimed by %s, %s"):format(ColoredName(claimed.claimedBy), GG:Age(claimed.claimedTs)))
   end
 
   d.seenSec:SetShown(e.lastSeen and true or false)
   if e.lastSeen then
-    d.seenLine:SetText(("%s by %s"):format(GG:Age(e.lastSeen), e.lastSeenBy or "?"))
+    d.seenLine:SetText(("%s by %s"):format(GG:Age(e.lastSeen), ColoredName(e.lastSeenBy or "?")))
     d.seenZone:SetText(e.lastSeenZone or "?")
   end
 
-  SetNotes(d, ("Notes (%d)"):format(#el.notes), PlayerBlocks(d, el.notes))
+  SetNotes(d, ("Notes (%d)"):format(#el.notes), PlayerBlocks(d, e, el.notes))
   d.bountyButton:SetText(b and "Remove bounty" or "Post bounty")
   if b then d.claimButton:Enable() else d.claimButton:Disable() end
   SetShown(d.playerOnly, true)
@@ -396,7 +451,7 @@ local function UpdateDetailHunter(d, el)
   d.entry = nil
   d.icon:SetAtlas("friends-icon-favorites")
   d.name:SetText(el.name)
-  d.name:SetTextColor(1, 0.82, 0)
+  SetHunterColor(d.name, el.name)
   d.info:SetText(el.count == 1 and "1 bounty claimed" or (el.count .. " bounties claimed"))
   d.bountySec:Hide()
   d.seenSec:Hide()
@@ -547,6 +602,66 @@ local function CreateSeenSection(d)
   d.seenZone = Label(s, "GameFontDisableSmall", PAD, -30, CONTENT_W)
 end
 
+local function SendVote(el, value)
+  if not GG.Vote or not GG.MyVote or not el.note then return end
+  if GG:MyVote(el.note) == value then value = 0 end -- clicking your own vote again takes it back
+  GG:Vote(el.entryName, el.note.id, value)
+  GG:RefreshUI()
+end
+
+-- The current vote shows at full strength and tinted, the other arrow dims.
+local function StyleArrow(button, active, r, g, b)
+  local tex = button:GetNormalTexture()
+  if tex then
+    if active then tex:SetVertexColor(r, g, b) else tex:SetVertexColor(1, 1, 1) end
+  end
+  button:SetAlpha(active and 1 or 0.5)
+end
+
+local function CreateArrow(parent, atlas, value, el)
+  local b = CreateFrame("Button", nil, parent)
+  b:SetSize(15, 10)
+  if b.SetNormalAtlas then b:SetNormalAtlas(atlas) end
+  if b.SetHighlightAtlas then b:SetHighlightAtlas(atlas) end
+  b:SetScript("OnClick", function() SendVote(el, value) end)
+  Tip(b, value == 1 and "Vote up" or "Vote down")
+  return b
+end
+
+local function CreateVoteControl(el)
+  local v = CreateFrame("Frame", nil, el)
+  v:SetWidth(VOTE_W - 2)
+  v:SetPoint("TOPRIGHT", -2, -1)
+  v:SetPoint("BOTTOMRIGHT", -2, 1)
+  v.up = CreateArrow(v, ARROW_UP, 1, el)
+  v.up:SetPoint("TOP")
+  v.down = CreateArrow(v, ARROW_DOWN, -1, el)
+  v.down:SetPoint("BOTTOM")
+  v.score = v:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  v.score:SetPoint("CENTER")
+  v.score:SetWidth(VOTE_W - 2)
+  v.score:SetJustifyH("CENTER")
+  return v
+end
+
+local function SetScoreColor(fs, score)
+  if score > 0 then fs:SetTextColor(0.4, 1, 0.4)
+  elseif score < 0 then fs:SetTextColor(1, 0.4, 0.4)
+  else fs:SetTextColor(0.5, 0.5, 0.5) end
+end
+
+local function UpdateVote(el, data)
+  el.vote:SetShown(data.voting and true or false)
+  if not data.voting then return end
+  el.vote.score:SetText(data.score)
+  SetScoreColor(el.vote.score, data.score)
+  -- Your own note cannot be voted on, but its score still shows.
+  el.vote.up:SetShown(not data.own)
+  el.vote.down:SetShown(not data.own)
+  StyleArrow(el.vote.up, data.myVote == 1, 0.4, 1, 0.4)
+  StyleArrow(el.vote.down, data.myVote == -1, 1, 0.4, 0.4)
+end
+
 local function InitNote(el, data)
   if not el.created then
     el.created = true
@@ -554,19 +669,32 @@ local function InitNote(el, data)
     el.bg:SetAllPoints()
     el.bg:SetColorTexture(1, 1, 1, 0.04)
     el.text = el:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    el.text:SetPoint("TOPLEFT", 4, -3)
-    el.text:SetWidth(NOTE_W)
     el.text:SetJustifyH("LEFT")
     el.text:SetJustifyV("TOP")
     el.meta = el:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    el.meta:SetPoint("TOPLEFT", el.text, "BOTTOMLEFT", 0, -1)
-    el.meta:SetWidth(NOTE_W)
     el.meta:SetJustifyH("LEFT")
     el.meta:SetWordWrap(false)
+    el.star = el:CreateTexture(nil, "ARTWORK")
+    el.star:SetSize(14, 14)
+    el.star:SetPoint("TOPLEFT", 4, -3)
+    el.star:SetAtlas("friends-icon-favorites")
+    el.vote = CreateVoteControl(el)
   end
+  el.note, el.entryName = data.note, data.entryName
   el.bg:SetShown(data.index % 2 == 0)
+  -- The star pushes only this note's text right; the meta line stays under the left edge.
+  local shift = data.first and STAR_W or 0
+  local width = data.voting and TEXT_W or NOTE_W
+  el.star:SetShown(data.first and true or false)
+  el.text:ClearAllPoints()
+  el.text:SetPoint("TOPLEFT", 4 + shift, -3)
+  el.text:SetWidth(width - shift)
+  el.meta:ClearAllPoints()
+  el.meta:SetPoint("TOPLEFT", el.text, "BOTTOMLEFT", -shift, -1)
+  el.meta:SetWidth(width)
   el.text:SetText(data.text)
   el.meta:SetText(data.meta)
+  UpdateVote(el, data)
 end
 
 local function CreateNotesSection(d)
