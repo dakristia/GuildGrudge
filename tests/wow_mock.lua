@@ -170,7 +170,7 @@ function M.newClient(opts)
   env._G = env
 
   c.ns = {}
-  for _, file in ipairs({ "Core.lua", "Sync.lua", "Detect.lua", "UI.lua" }) do
+  for _, file in ipairs({ "Core.lua", "Sync.lua", "Detect.lua", "UI.lua", "Options.lua" }) do
     local chunk = assert(loadfile(M.addonDir .. "/" .. file))
     setfenv(chunk, env)
     local ok, err = pcall(chunk, "GuildGrudge", c.ns)

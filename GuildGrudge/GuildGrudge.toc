@@ -4,8 +4,13 @@
 ## Author: Your Guild
 ## Version: 0.2.1
 ## SavedVariables: GuildGrudgeDB
+## IconTexture: Interface\Icons\Ability_Hunter_SniperShot
+## AddonCompartmentFunc: GuildGrudge_OnCompartmentClick
+## AddonCompartmentFuncOnEnter: GuildGrudge_OnCompartmentEnter
+## AddonCompartmentFuncOnLeave: GuildGrudge_OnCompartmentLeave
 
 Core.lua
 Sync.lua
 Detect.lua
 UI.lua
+Options.lua
