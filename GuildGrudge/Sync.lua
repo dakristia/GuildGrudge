@@ -7,6 +7,7 @@
 --   S^1^key^name^^class^zone                                "I just spotted this player"
 --   P^1^key^name^^class^raceFile^race^sex^level^ts          a player's class, race, sex and level (newest ts wins)
 --   L^1^key^name^^list^ts                                   which list a player is on (list = watch or wanted; newest ts wins)
+--   F^1^key^name^^by^ts^deleted^class^race^raceFile^sex^level  a nice name (added or removed; newest ts wins)
 --   H^1^since                                               "send me everything newer than <since>"
 --   D^1^requester                                           "I'm answering that request, others can relax"
 -- The empty fifth field used to be the realm. Receivers rebuild the key from name.
@@ -74,6 +75,11 @@ function GG:SendList(key, e, channel, target)
   self:Send(join("L", PROTO, key, e.name, "", e.list or "wanted", e.listTs), channel, target)
 end
 
+function GG:SendNiceName(key, n, channel, target)
+  self:Send(join("F", PROTO, key, n.name, "", n.by, n.ts, n.deleted and 1 or 0, n.class, n.race, n.raceFile, n.sex, n.level),
+    channel, target)
+end
+
 function GG:SendBounty(key, e, channel, target)
   local b = e.bounty
   local head = join("B", PROTO, key, e.name, "", b.poster, b.ts, b.claimedBy, b.claimedTs, "")
@@ -124,6 +130,9 @@ function GG:DumpTo(target, since)
         if vote.ts > since then self:SendVote(key, e, n, voter, "WHISPER", target) end
       end
     end
+  end
+  for key, n in pairs(self.db.names) do
+    if n.ts > since then self:SendNiceName(key, n, "WHISPER", target) end
   end
 end
 
@@ -203,6 +212,29 @@ handlers.L = function(t)
   if list ~= "watch" and list ~= "wanted" then return end
   e.list = list == "watch" and "watch" or nil
   e.listTs = ts
+  GG:Changed()
+end
+
+handlers.F = function(t)
+  local full, ts = GG:NormalizeName(t[4]), tonumber(t[7])
+  if not full or not ts then return end
+  local key = GG:MakeKey(full)
+  local n = GG.db.names[key]
+  if n and ts <= n.ts then return end
+  if not n then
+    n = { name = full }
+    GG.db.names[key] = n
+  end
+  n.by = nz(t[6]) or n.by or "?"
+  n.ts = ts
+  n.deleted = t[8] == "1" or nil
+  -- Empty fields never overwrite what we know.
+  if nz(t[9]) then n.class = t[9] end
+  if nz(t[10]) then n.race = t[10] end
+  if nz(t[11]) then n.raceFile = t[11] end
+  local sex, level = tonumber(t[12]), tonumber(t[13])
+  if sex == 2 or sex == 3 then n.sex = sex end
+  if level and level > 0 then n.level = level end
   GG:Changed()
 end
 

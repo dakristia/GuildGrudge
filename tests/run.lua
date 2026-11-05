@@ -649,5 +649,109 @@ test("MaxTs counts listTs", function()
   eq(a.ns:MaxTs(), W.serverTime + 5000)
 end)
 
+---------------------------------------------------------------------------
+-- Nice names
+---------------------------------------------------------------------------
+local anaUnit = { name = "Anaconda", race = "Undead", raceFile = "Scourge", sex = 3, level = 12, class = "WARRIOR" }
+
+test("adding a nice name from a target syncs to a guildie with its class", function()
+  local a, b = unpack(guild(2))
+  a.units = { target = anaUnit }
+  a.ns:AddNiceName("Anaconda", "target")
+  W.advance(2)
+  local n = b.ns.db.names["anaconda"]
+  assert(n, "B has the name")
+  eq(n.name, "Anaconda"); eq(n.by, "Player1"); eq(n.class, "WARRIOR")
+  eq(n.raceFile, "Scourge"); eq(n.race, "Undead"); eq(n.sex, 3); eq(n.level, 12)
+  eq(#b.ns:NiceNames(), 1, "B live names")
+  noErrors(a); noErrors(b)
+end)
+
+test("/gg nice adds by name", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "nice Funny Name")
+  W.advance(2)
+  assert(b.ns.db.names["funny name"] or b.ns.db.names["funny"], "B has the name")
+  noErrors(b)
+end)
+
+test("a duplicate nice name is refused and sends nothing", function()
+  local a = guild(2)[1]
+  a.ns:AddNiceName("Anaconda")
+  W.advance(2)
+  local sent = W.log.sent
+  a.chat = {}
+  a.ns:AddNiceName("anaconda")
+  W.advance(2)
+  eq(W.log.sent, sent, "messages sent")
+  assert(chatHas(a, "Anaconda is already on the nice names list."), "message: " .. table.concat(a.chat, " / "))
+end)
+
+test("removing a nice name syncs as a tombstone, and it can be added again", function()
+  local a, b = unpack(guild(2))
+  a.ns:AddNiceName("Anaconda")
+  W.advance(2)
+  W.advance(2)
+  b.ns:RemoveNiceName("Anaconda")
+  W.advance(2)
+  assert(a.ns.db.names["anaconda"].deleted, "A sees it removed")
+  eq(#a.ns:NiceNames(), 0, "A live names")
+  W.advance(2)
+  a.ns:AddNiceName("Anaconda")
+  W.advance(2)
+  eq(#b.ns:NiceNames(), 1, "B sees it again")
+  eq(b.ns.db.names["anaconda"].deleted, nil)
+end)
+
+test("a login sync delivers nice names to a newcomer", function()
+  local a = guild(2)[1]
+  a.ns:AddNiceName("Anaconda")
+  W.advance(2)
+  a.ns:AddNiceName("Bananas")
+  W.advance(2)
+  local d = W.newClient({ name = "Newbie", realm = "Realm" })
+  W.login(d)
+  W.advance(40)
+  eq(#d.ns:NiceNames(), 2, "newcomer names")
+  noErrors(d)
+end)
+
+test("an older F does not overwrite a newer one, and empty fields keep class data", function()
+  local a, b = unpack(guild(2))
+  a.units = { target = anaUnit }
+  a.ns:AddNiceName("Anaconda", "target")
+  W.advance(2)
+  local n = b.ns.db.names["anaconda"]
+  local ts = n.ts
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "F^1^anaconda^Anaconda^^Other^" .. (ts - 100) .. "^1^PRIEST^Orc^Orc^2^5", "GUILD")
+  eq(n.ts, ts); eq(n.deleted, nil); eq(n.class, "WARRIOR"); eq(n.by, "Player1")
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "F^1^anaconda^Anaconda^^Other^" .. (ts + 100) .. "^0^^^^^", "GUILD")
+  eq(n.ts, ts + 100); eq(n.by, "Other"); eq(n.class, "WARRIOR"); eq(n.raceFile, "Scourge"); eq(n.level, 12)
+  noErrors(b)
+end)
+
+test("MaxTs counts nice names", function()
+  local a = guild(1)[1]
+  a.ns.db.names["x"] = { name = "X", by = "Y", ts = W.serverTime + 7000 }
+  eq(a.ns:MaxTs(), W.serverTime + 7000)
+end)
+
+test("nice names never show up as grudge entries", function()
+  local a, b = unpack(guild(2))
+  a.units = { target = anaUnit }
+  a.ns:AddNiceName("Anaconda", "target")
+  W.advance(2)
+  for _, c in ipairs({ a, b }) do
+    eq(count(c.ns.db.entries), 0, c.name .. " entries")
+    eq(c.ns:Find("Anaconda"), nil, c.name .. " Find")
+    eq(c.ns:GetEntry("Anaconda", false), nil, c.name .. " GetEntry")
+  end
+  local e = a.ns:GetEntry("Anaconda", true)
+  assert(not a.ns:IsListed(e), "not listed")
+  noErrors(a); noErrors(b)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

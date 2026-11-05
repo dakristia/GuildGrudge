@@ -15,6 +15,7 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 | `/gg` | Open the Most Wanted window |
 | `/gg t <note>` | Add a note on your current target (also records class, race, level) |
 | `/gg add <first> <surname> <note>` | Add a note by name |
+| `/gg nice <first> <surname>` | Add a funny character name to the guild's nice names list |
 | `/gg show <name>` | Print everything on a player |
 | `/gg del <name>` | Remove your own notes on a player |
 | `/gg watch <first> <surname> <note>` | Add a note on the watch list |
@@ -41,6 +42,7 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 - **Detection:** nameplates, target and mouseover. Forever blocks addons from the combat log, so a ganker you never see a nameplate for is not detected. Turn enemy nameplates on (`V`). Alerts have a 60-second cooldown per player.
 - **Bounties:** getting the killing blow on a player with an open bounty (the `PARTY_KILL` event) claims it and posts in guild chat.
 - **Watch list:** for friendly players you want to keep an eye on (ninja looters, scammers). Pick the list when you add a player, and give a note a tag such as "Ninja looter". Watch-list players only warn you when they join your group (and optionally with a chat line when nearby), and they cannot have bounties.
+- **Nice names:** a guild-shared list of funny character names, on the Names tab. No notes, alerts or bounties. Right-click a player's portrait and pick Add to nice names, or use `/gg nice`. Anyone can remove a name. It is kept apart from the grudge lists.
 - **Tooltip:** listed players get a "Grudge: N notes / Bounty" line.
 
 ## Check these first in game

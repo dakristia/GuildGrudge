@@ -110,6 +110,14 @@ function GG:PromptAddPlayer(list, owner)
   if list == "watch" then PickTag("Tag for the watch list", owner, Ask) else Ask() end
 end
 
+function GG:PromptNiceName()
+  self:Prompt("Nice name, e.g. Ana Forever:", function(text)
+    local name = GG:TakeName(text)
+    if not name then return GG:Print("Write the full name, e.g. Ana Forever") end
+    GG:AddNiceName(name)
+  end)
+end
+
 local function HasMyNote(e)
   local me = GG:Me()
   for _, n in ipairs(GG:SortedNotes(e)) do
@@ -120,6 +128,13 @@ end
 local function ShowRowMenu(row)
   local e = row.entry
   if not e or not MenuUtil or not MenuUtil.CreateContextMenu then return end
+  if row.kind == "name" then
+    MenuUtil.CreateContextMenu(row, function(_, root)
+      root:CreateTitle(e.name)
+      root:CreateButton("Remove from nice names", function() GG:RemoveNiceName(e.name) end)
+    end)
+    return
+  end
   MenuUtil.CreateContextMenu(row, function(_, root)
     root:CreateTitle(e.name)
     root:CreateButton("Show all notes", function() GG:Show(e.name) end)
@@ -160,13 +175,14 @@ end
 local ICON = "Interface\\Icons\\"
 local RAID_ICONS = "Interface\\TargetingFrame\\UI-RaidTargetingIcons"
 local CLASS_CIRCLES = "Interface\\TargetingFrame\\UI-Classes-Circles"
-local TAB_WANTED, TAB_BOUNTIES, TAB_HUNTERS, TAB_WATCH = 1, 2, 3, 4
-local TABS = { "Wanted", "Bounties", "Hunters", "Watch" }
+local TAB_WANTED, TAB_BOUNTIES, TAB_HUNTERS, TAB_WATCH, TAB_NAMES = 1, 2, 3, 4, 5
+local TABS = { "Wanted", "Bounties", "Hunters", "Watch", "Names" }
 local EMPTY_TEXT = {
   [TAB_WANTED] = "Nobody on the list yet. Target a ganker and click the crosshair button.",
   [TAB_BOUNTIES] = "No open bounties.",
   [TAB_HUNTERS] = "No bounties claimed yet.",
   [TAB_WATCH] = "Nobody on the watch list. Right-click a player's portrait and pick Add to watch list.",
+  [TAB_NAMES] = "No nice names yet. Right-click a player's portrait and pick Add to nice names.",
 }
 
 local function ClassRGB(e)
@@ -379,9 +395,18 @@ local function HunterList()
   return list
 end
 
+-- Nice names, newest first. The record has name, class, race, raceFile, sex and level, like an entry.
+local function NameList()
+  local list = {}
+  for _, n in ipairs(GG:NiceNames()) do
+    list[#list + 1] = { kind = "name", key = GG:MakeKey(n.name), e = n, name = n.name }
+  end
+  return list
+end
+
 local function Matches(el, filter)
   if filter == "" then return true end
-  if el.kind == "hunter" then return strlower(el.name):find(filter, 1, true) ~= nil end
+  if el.kind == "hunter" or el.kind == "name" then return strlower(el.name):find(filter, 1, true) ~= nil end
   if el.key:find(filter, 1, true) then return true end
   for _, n in ipairs(el.notes) do
     if strlower(n.text):find(filter, 1, true) then return true end
@@ -500,19 +525,39 @@ local function SetRowPlayer(row, data)
   end
 end
 
+local function SetRowName(row, data)
+  local e = data.e
+  row.hunterIcon:Hide()
+  SetPicture(row.portrait, row.icon, row.badge, e, data.key)
+  row.name:SetText(e.name)
+  row.name:SetTextColor(ClassRGB(e))
+  row.info:SetText(InfoText(e))
+  row.note:SetTextColor(0.6, 0.6, 0.6)
+  row.note:SetWidth(250)
+  row.note:SetText(("Added by %s, %s"):format(ColoredName(e.by or "?"), GG:Age(e.ts)))
+  row.count:SetText("")
+  row.skull:Hide()
+  row.reward:SetText("")
+end
+
 local function InitRow(row, data)
   if not row.created then
     row.created = true
     CreateRowRegions(row)
   end
-  row.key, row.entry = data.key, data.e
-  -- Rows are recycled, so a wanted row first undoes everything a watch row changed.
+  row.key, row.entry, row.kind = data.key, data.e, data.kind
+  -- Rows are recycled, so a wanted row first undoes everything a watch or name row changed.
   row.bg:SetColorTexture(1, 1, 1, 0.04)
   row.bg:SetShown(data.index % 2 == 0)
   row.stripe:Hide()
   row.caution:Hide()
+  row.skull:Hide()
   row.reward:SetTextColor(1, 0.82, 0)
-  if data.kind == "hunter" then SetRowHunter(row, data) else SetRowPlayer(row, data) end
+  row.note:SetTextColor(1, 1, 1)
+  row.count:SetText("")
+  if data.kind == "hunter" then SetRowHunter(row, data)
+  elseif data.kind == "name" then SetRowName(row, data)
+  else SetRowPlayer(row, data) end
   if frame.selected == data.key then row:LockHighlight() else row:UnlockHighlight() end
 end
 
@@ -606,7 +651,7 @@ end
 -- Each visible section hangs below the one above it, so a hidden section leaves no gap.
 local function Relayout(d, hasButtons)
   local prev = d.header
-  for _, section in ipairs({ d.bountySec, d.watchSec, d.seenSec, d.notesSec }) do
+  for _, section in ipairs({ d.bountySec, d.watchSec, d.seenSec, d.addedSec, d.notesSec }) do
     if section:IsShown() then
       section:ClearAllPoints()
       section:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -6)
@@ -665,7 +710,9 @@ local function UpdateDetailPlayer(d, el)
   SetNotes(d, ("Notes (%d)"):format(#el.notes), PlayerBlocks(d, e, el.notes))
   d.bountyButton:SetText(watch and "Move to Wanted" or b and "Remove bounty" or "Post bounty")
   if b then d.claimButton:Enable() else d.claimButton:Disable() end
+  d.addedSec:Hide()
   SetShown(d.playerOnly, true)
+  SetShown(d.nameOnly, false)
   d.claimButton:SetShown(not watch)
 end
 
@@ -680,8 +727,29 @@ local function UpdateDetailHunter(d, el)
   d.bountySec:Hide()
   d.watchSec:Hide()
   d.seenSec:Hide()
+  d.addedSec:Hide()
   SetNotes(d, ("Claimed bounties (%d)"):format(el.count), ClaimBlocks(d, el.claims))
   SetShown(d.playerOnly, false)
+  SetShown(d.nameOnly, false)
+end
+
+-- A nice name has no notes, so the notes section is hidden and only the Remove button shows.
+local function UpdateDetailName(d, el)
+  local e = el.e
+  d.entry = e
+  UpdatePortrait(d)
+  d.name:SetText(e.name)
+  d.name:SetTextColor(ClassRGB(e))
+  d.info:SetText(strtrim(("%s %s %s"):format(
+    e.level and ("lvl " .. e.level) or "", e.race or "", e.class and strlower(e.class) or "")))
+  d.bountySec:Hide()
+  d.watchSec:Hide()
+  d.seenSec:Hide()
+  d.addedSec:Show()
+  d.addedLine:SetText(("Added by %s, %s"):format(ColoredName(e.by or "?"), GG:Age(e.ts)))
+  d.notesSec:Hide()
+  SetShown(d.playerOnly, false)
+  SetShown(d.nameOnly, true)
 end
 
 local function UpdateDetail(d, el)
@@ -689,15 +757,19 @@ local function UpdateDetail(d, el)
     d.entry = nil
     SetShown(d.always, false)
     SetShown(d.playerOnly, false)
+    SetShown(d.nameOnly, false)
     d.bountySec:Hide()
     d.watchSec:Hide()
     d.seenSec:Hide()
+    d.addedSec:Hide()
     d.hint:Show()
     return
   end
   d.hint:Hide()
   SetShown(d.always, true)
-  if el.kind == "hunter" then UpdateDetailHunter(d, el) else UpdateDetailPlayer(d, el) end
+  if el.kind == "hunter" then UpdateDetailHunter(d, el)
+  elseif el.kind == "name" then UpdateDetailName(d, el)
+  else UpdateDetailPlayer(d, el) end
   Relayout(d, el.kind ~= "hunter")
 end
 
@@ -730,14 +802,15 @@ local function BuildToolbar(f)
   b = AddIconButton(f, b, "Put a /gg macro on your cursor", ICON .. "INV_Misc_Book_09", nil, function()
     if GG.MakeMacro then GG:MakeMacro() end
   end)
-  b = AddIconButton(f, b, "Add a player by name (on the Watch tab: add to the watch list)", nil,
-    "communities-icon-addchannelplus", function(self)
-      GG:PromptAddPlayer(f.tab == TAB_WATCH and "watch" or nil, self)
+  b = AddIconButton(f, b, "Add a player by name (on the Watch tab: add to the watch list, on the Names tab: add a nice name)",
+    nil, "communities-icon-addchannelplus", function(self)
+      if f.tab == TAB_NAMES then GG:PromptNiceName() else GG:PromptAddPlayer(f.tab == TAB_WATCH and "watch" or nil, self) end
     end)
-  AddIconButton(f, b, "Note your target (on the Watch tab: add to the watch list)",
+  AddIconButton(f, b, "Note your target (on the Watch tab: add to the watch list, on the Names tab: add a nice name)",
     ICON .. "Ability_Hunter_SniperShot", nil, function(self)
       local full = UnitIsPlayer("target") and GG:UnitFullName("target")
       if not full then return GG:Print("Target a player first.") end
+      if f.tab == TAB_NAMES then return GG:AddNiceName(full, "target") end
       if f.tab == TAB_WATCH then GG:PromptWatchNote(full, "target", self) else GG:PromptNote(full, "target") end
     end)
 end
@@ -853,6 +926,12 @@ local function CreateSeenSection(d)
   Label(s, "GameFontNormal", PAD, 0, CONTENT_W):SetText("Last seen")
   d.seenLine = Label(s, "GameFontHighlightSmall", PAD, -16, CONTENT_W)
   d.seenZone = Label(s, "GameFontDisableSmall", PAD, -30, CONTENT_W)
+end
+
+local function CreateAddedSection(d)
+  local s = CreateSection(d, 20)
+  d.addedSec = s
+  d.addedLine = Label(s, "GameFontDisableSmall", PAD, -2, CONTENT_W)
 end
 
 local function SendVote(el, value)
@@ -992,6 +1071,7 @@ local function CreateDetailWidgets(d)
   CreateBountySection(d)
   CreateWatchSection(d)
   CreateSeenSection(d)
+  CreateAddedSection(d)
   CreateNotesSection(d)
 
   d.hint = d:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -1000,15 +1080,18 @@ local function CreateDetailWidgets(d)
 
   d.always = { d.header, d.notesSec }
   d.playerOnly = {}
+  d.nameOnly = {}
 end
 
-local function AddDetailButton(d, x, width, label, onClick)
+-- group: which button list it belongs to (player buttons by default).
+local function AddDetailButton(d, x, width, label, onClick, group)
   local b = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
   b:SetSize(width, 22)
   b:SetPoint("BOTTOMLEFT", x, 10)
   b:SetText(label)
   b:SetScript("OnClick", onClick)
-  d.playerOnly[#d.playerOnly + 1] = b
+  group = group or d.playerOnly
+  group[#group + 1] = b
   return b
 end
 
@@ -1035,6 +1118,9 @@ local function BuildDetail(f)
   d.claimButton = AddDetailButton(d, 210, 80, "Claim", function()
     if d.entry then GG:TryClaim(d.entry.name, true) end
   end)
+  d.removeNameButton = AddDetailButton(d, 6, 80, "Remove", function()
+    if d.entry then GG:RemoveNiceName(d.entry.name) end
+  end, d.nameOnly)
   f.detail = d
 end
 
@@ -1088,7 +1174,8 @@ local function Build()
     rowsPending = false
     if not f:IsShown() or not f.box.ForEachFrame then return end
     f.box:ForEachFrame(function(row, data)
-      if data and data.kind ~= "hunter" then
+      -- Player rows and name rows both carry a record in data.e.
+      if data and (data.kind == "player" or data.kind == "name") then
         SetPicture(row.portrait, row.icon, row.badge, data.e, data.key)
       end
     end)
@@ -1121,6 +1208,7 @@ function GG:RefreshUI()
   local all
   if tab == TAB_HUNTERS then all = HunterList()
   elseif tab == TAB_WATCH then all = WatchList()
+  elseif tab == TAB_NAMES then all = NameList()
   else all = WantedList(tab == TAB_BOUNTIES) end
 
   -- The selection survives a search that hides it, but not a deleted or claimed entry.
@@ -1173,6 +1261,7 @@ local function AddUnitMenuItems(_, root, ctx)
   -- A button with child buttons is a submenu, as Blizzard builds them.
   local watch = root:CreateButton("Add to watch list")
   AddTagButtons(watch, function(tag) AskWatchNote(name, unit, tag) end)
+  root:CreateButton("Add to nice names", function() GG:AddNiceName(name, unit) end)
 end
 
 if Menu and Menu.ModifyMenu then

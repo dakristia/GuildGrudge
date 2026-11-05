@@ -165,11 +165,17 @@ end
 --                       votes = { [voterFullName] = { v = 1 | -1 | 0, ts } } } },  -- 0 = vote removed, kept so it syncs
 --   bounty = { poster, reward, ts, claimedBy, claimedTs }   -- ts = last change
 -- }
+-- GuildGrudgeDB.names[key] = {          -- the nice names list; separate from entries, so nothing else sees it
+--   name, by,                           -- by = who added it
+--   ts, deleted,                        -- ts = last change, newer wins when syncing; deleted is kept so it syncs
+--   class, race, raceFile, sex, level   -- same meaning as on an entry
+-- }
 ---------------------------------------------------------------------------
 function GG:InitDB()
   GuildGrudgeDB = GuildGrudgeDB or {}
   local db = GuildGrudgeDB
   db.entries  = db.entries or {}
+  db.names    = db.names or {}
   db.settings = db.settings or {}
   for k, v in pairs(DEFAULTS) do
     if db.settings[k] == nil then db.settings[k] = v end
@@ -337,6 +343,9 @@ function GG:MaxTs()
     if (e.profileTs or 0) > max then max = e.profileTs end
     if (e.listTs or 0) > max then max = e.listTs end
   end
+  for _, n in pairs(self.db.names) do
+    if (n.ts or 0) > max then max = n.ts end
+  end
   return max
 end
 
@@ -456,6 +465,61 @@ function GG:TryClaim(name, manual)
   self:Changed()
 end
 
+-- unit (optional): a real unit to copy class, race, sex and level from.
+function GG:AddNiceName(name, unit)
+  local full = self:NormalizeName(name)
+  if not full then return self:Print("Usage: /gg nice <name>") end
+  local key = self:MakeKey(full)
+  local n = self.db.names[key]
+  if n and not n.deleted then return self:Print(n.name, "is already on the nice names list.") end
+  n = n or { name = full }
+  n.by, n.ts, n.deleted = self:Me(), self:Now(), nil
+  if unit then
+    local _, class = UnitClass(unit)
+    local race, raceFile = UnitRace(unit)
+    local lvl = UnitLevel(unit)
+    local sex = UnitSex and UnitSex(unit)
+    if not self:Secret(class, race, raceFile, lvl, sex) then
+      n.class = class or n.class
+      n.race = race or n.race
+      n.raceFile = raceFile or n.raceFile
+      -- 1 is "unknown", which has no race icon, so only male (2) and female (3) are kept.
+      if sex == 2 or sex == 3 then n.sex = sex end
+      if lvl and lvl > 0 then n.level = lvl end
+    end
+  end
+  self.db.names[key] = n
+  self:SendNiceName(key, n, "GUILD")
+  self:Print("Added", self:ColorName(n), "to the nice names list.")
+  self:Changed()
+end
+
+function GG:RemoveNiceName(name)
+  local full = self:NormalizeName(name)
+  local key = full and self:MakeKey(full)
+  local n = key and self.db.names[key]
+  if not n or n.deleted then return self:Print(name, "is not on the nice names list.") end
+  n.deleted, n.ts = true, self:Now()
+  self:SendNiceName(key, n, "GUILD")
+  self:Print("Removed", self:ColorName(n), "from the nice names list.")
+  self:Changed()
+end
+
+-- Live names, newest first.
+function GG:NiceNames()
+  local list = {}
+  for key, n in pairs(self.db.names) do
+    if not n.deleted then list[#list + 1] = { key = key, n = n } end
+  end
+  table.sort(list, function(a, b)
+    if a.n.ts ~= b.n.ts then return a.n.ts > b.n.ts end
+    return a.key < b.key
+  end)
+  local names = {}
+  for i, item in ipairs(list) do names[i] = item.n end
+  return names
+end
+
 function GG:Show(input)
   local e, _, ambiguous = self:Find(input)
   if not e then return self:NotFound(input, ambiguous) end
@@ -518,6 +582,7 @@ local HELP = {
   "/gg add <name> <note> - add a note by name",
   "/gg watch <name> <note> - add a note on the watch list (no bounties, warns when they join your group)",
   "/gg move <name> - move a player between the Wanted and watch lists",
+  "/gg nice <name> - add a funny character name to the guild's nice names list",
   "/gg show <name> - print everything on a player",
   "/gg del <name> - remove your own notes on a player",
   "/gg bounty <name> <reward> - post a (fictive) bounty",
@@ -558,6 +623,10 @@ SlashCmdList.GUILDGRUDGE = function(msg)
     if not name then return GG:Print("Usage: /gg watch <name> <note>") end
     GG:HintNewName(name)
     GG:AddNote(name, note, nil, { list = "watch" })
+  elseif cmd == "nice" then
+    local name = GG:TakeName(rest)
+    if not name then return GG:Print("Usage: /gg nice <name>") end
+    GG:AddNiceName(name)
   elseif cmd == "move" then
     local e, _, ambiguous = GG:Find(rest)
     if not e then return GG:NotFound(rest, ambiguous) end
