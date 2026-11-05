@@ -2,10 +2,37 @@
 local ADDON, GG = ...
 local frame
 
--- The watch list is for friendly players, so it gets a yellow caution look instead of the red skull.
-local CAUTION = "Interface\\DialogFrame\\UI-Dialog-Icon-AlertNew"
-local WATCH_R, WATCH_G, WATCH_B = 1, 0.8, 0
-local WATCH_HEX = "ffffcc00"
+-- The watch and kudos lists are for friendly players, so they get their own colour and icon instead of the red skull.
+-- Everything the window shows for them reads from here. The icon is a texture file or an atlas.
+local LISTS = {
+  watch = {
+    tab = "Watch", heading = "Watch list", tip = "Watch list:", noun = "watch list", menu = "Add to watch list",
+    r = 1, g = 0.8, b = 0, hex = "ffffcc00",
+    texture = "Interface\\DialogFrame\\UI-Dialog-Icon-AlertNew",
+    hint = "Warns you when they join your group.",
+    empty = "Nobody on the watch list. Right-click a player's portrait and pick Add to watch list.",
+  },
+  kudos = {
+    tab = "Kudos", heading = "Kudos", tip = "Kudos:", noun = "kudos list", menu = "Add kudos",
+    r = 0.3, g = 1, b = 0.4, hex = "ff4dff66",
+    atlas = "UI-LFG-ReadyMark",
+    hint = "Tells you when they join your group.",
+    empty = "Nobody on the kudos list. Right-click a player's portrait and pick Add kudos.",
+  },
+}
+local SPECIAL = { "watch", "kudos" } -- the lists that have tags
+local MOVE_ORDER = { "wanted", "watch", "kudos" }
+local MOVE_LABEL = { wanted = "Wanted list", watch = "Watch list", kudos = "Kudos list" }
+
+-- Rows are recycled, so this runs on every refresh. SetAtlas sets its own coordinates; SetTexture keeps the old ones, so they are reset.
+local function SetListIcon(tex, info)
+  if info.atlas then
+    tex:SetAtlas(info.atlas)
+  else
+    tex:SetTexture(info.texture)
+    tex:SetTexCoord(0, 1, 0, 1)
+  end
+end
 
 -- Text input popup. The callback lives in the popup data so one dialog serves every caller.
 -- The optional variant also calls it with an empty text, for a note that has a tag.
@@ -56,8 +83,9 @@ function GG:Prompt(title, onAccept, initialText, allowEmpty)
 end
 
 -- Adds the tag choices to a menu or submenu: every known tag, a custom one, or none (nil).
-local function AddTagButtons(desc, onPick)
-  for _, tag in ipairs(GG:KnownTags()) do
+-- list: "watch" or "kudos", which decides the suggested tags.
+local function AddTagButtons(desc, list, onPick)
+  for _, tag in ipairs(GG:KnownTags(list)) do
     desc:CreateButton(tag, function() onPick(tag) end)
   end
   desc:CreateButton("Custom tag...", function()
@@ -67,23 +95,24 @@ local function AddTagButtons(desc, onPick)
 end
 
 -- A tag picked, so ask for the note. It may be empty when there is a tag.
-local function AskWatchNote(name, unit, tag)
+local function AskListNote(list, name, unit, tag)
   local title = tag and "Note on %s (optional):" or "Note on %s:"
   GG:Prompt(title:format(name), function(text)
-    GG:AddNote(name, text, unit, { tag = tag, list = "watch" })
+    GG:AddNote(name, text, unit, { tag = tag, list = list })
   end, nil, tag ~= nil)
 end
 
-local function PickTag(title, owner, onPick)
+local function PickTag(title, list, owner, onPick)
   if not MenuUtil or not MenuUtil.CreateContextMenu then return end
   MenuUtil.CreateContextMenu(owner or UIParent, function(_, root)
     root:CreateTitle(title)
-    AddTagButtons(root, onPick)
+    AddTagButtons(root, list, onPick)
   end)
 end
 
-function GG:PromptWatchNote(name, unit, owner)
-  PickTag("Tag for " .. name, owner, function(tag) AskWatchNote(name, unit, tag) end)
+-- list: "watch" or "kudos"
+function GG:PromptListNote(list, name, unit, owner)
+  PickTag("Tag for " .. name, list, owner, function(tag) AskListNote(list, name, unit, tag) end)
 end
 
 function GG:PromptNote(name, unit)
@@ -94,7 +123,7 @@ function GG:PromptBounty(name)
   self:Prompt("Bounty reward on " .. name .. " (e.g. 50g):", function(text) GG:SetBounty(name, text) end)
 end
 
--- list "watch" asks for a tag first, so the name prompt may then leave the note empty.
+-- list "watch" or "kudos" asks for a tag first, so the name prompt may then leave the note empty.
 function GG:PromptAddPlayer(list, owner)
   local function Ask(tag)
     self:Prompt("Name and note, e.g. Ana Forever camped me at the FP:", function(text)
@@ -104,10 +133,10 @@ function GG:PromptAddPlayer(list, owner)
         return
       end
       GG:HintNewName(name)
-      GG:AddNote(name, note, nil, list == "watch" and { tag = tag, list = "watch" } or nil)
+      GG:AddNote(name, note, nil, list and { tag = tag, list = list } or nil)
     end, nil, tag ~= nil)
   end
-  if list == "watch" then PickTag("Tag for the watch list", owner, Ask) else Ask() end
+  if list then PickTag("Tag for the " .. LISTS[list].noun, list, owner, Ask) else Ask() end
 end
 
 function GG:PromptNiceName()
@@ -125,6 +154,24 @@ local function HasMyNote(e)
   end
 end
 
+-- Adds a button for every list the player is not on.
+local function AddMoveButtons(desc, e)
+  local current = GG:ListOf(e)
+  for _, list in ipairs(MOVE_ORDER) do
+    if list ~= current then
+      desc:CreateButton(MOVE_LABEL[list], function() GG:SetList(e.name, list) end)
+    end
+  end
+end
+
+local function ShowMoveMenu(e, owner)
+  if not MenuUtil or not MenuUtil.CreateContextMenu then return end
+  MenuUtil.CreateContextMenu(owner, function(_, root)
+    root:CreateTitle("Move " .. e.name)
+    AddMoveButtons(root, e)
+  end)
+end
+
 local function ShowRowMenu(row)
   local e = row.entry
   if not e or not MenuUtil or not MenuUtil.CreateContextMenu then return end
@@ -138,9 +185,9 @@ local function ShowRowMenu(row)
   MenuUtil.CreateContextMenu(row, function(_, root)
     root:CreateTitle(e.name)
     root:CreateButton("Show all notes", function() GG:Show(e.name) end)
-    if GG:IsWatch(e) then
-      root:CreateButton("Add note...", function() GG:PromptWatchNote(e.name) end)
-      root:CreateButton("Move to Wanted list", function() GG:SetList(e.name, "wanted") end)
+    local list = GG:ListOf(e)
+    if list ~= "wanted" then
+      root:CreateButton("Add note...", function() GG:PromptListNote(list, e.name) end)
     else
       root:CreateButton("Add note...", function() GG:PromptNote(e.name) end)
       if GG:ActiveBounty(e) then
@@ -149,8 +196,9 @@ local function ShowRowMenu(row)
       else
         root:CreateButton("Post bounty...", function() GG:PromptBounty(e.name) end)
       end
-      root:CreateButton("Move to watch list", function() GG:SetList(e.name, "watch") end)
     end
+    -- A button with child buttons is a submenu.
+    AddMoveButtons(root:CreateButton("Move to"), e)
     if HasMyNote(e) then
       root:CreateButton("Delete my notes", function()
         if not StaticPopup_Show then return end
@@ -175,13 +223,15 @@ end
 local ICON = "Interface\\Icons\\"
 local RAID_ICONS = "Interface\\TargetingFrame\\UI-RaidTargetingIcons"
 local CLASS_CIRCLES = "Interface\\TargetingFrame\\UI-Classes-Circles"
-local TAB_WANTED, TAB_BOUNTIES, TAB_HUNTERS, TAB_WATCH, TAB_NAMES = 1, 2, 3, 4, 5
-local TABS = { "Wanted", "Bounties", "Hunters", "Watch", "Names" }
+local TAB_WANTED, TAB_BOUNTIES, TAB_HUNTERS, TAB_WATCH, TAB_KUDOS, TAB_NAMES = 1, 2, 3, 4, 5, 6
+local TABS = { "Wanted", "Bounties", "Hunters", LISTS.watch.tab, LISTS.kudos.tab, "Names" }
+local TAB_LIST = { [TAB_WATCH] = "watch", [TAB_KUDOS] = "kudos" } -- the tabs that show a special list
 local EMPTY_TEXT = {
   [TAB_WANTED] = "Nobody on the list yet. Target a ganker and click the crosshair button.",
   [TAB_BOUNTIES] = "No open bounties.",
   [TAB_HUNTERS] = "No bounties claimed yet.",
-  [TAB_WATCH] = "Nobody on the watch list. Right-click a player's portrait and pick Add to watch list.",
+  [TAB_WATCH] = LISTS.watch.empty,
+  [TAB_KUDOS] = LISTS.kudos.empty,
   [TAB_NAMES] = "No nice names yet. Right-click a player's portrait and pick Add to nice names.",
 }
 
@@ -347,22 +397,23 @@ local function WantedList(bountiesOnly)
   for key, e in pairs(GG.db.entries) do
     local notes = GG:SortedNotes(e)
     local bounty = GG:ActiveBounty(e)
-    if not GG:IsWatch(e) and (#notes > 0 or bounty) and (bounty or not bountiesOnly) then
+    if GG:ListOf(e) == "wanted" and (#notes > 0 or bounty) and (bounty or not bountiesOnly) then
       list[#list + 1] = { kind = "player", key = key, e = e, notes = notes, bounty = bounty }
     end
   end
   return list
 end
 
-local function WatchList()
-  local list = {}
+-- list: "watch" or "kudos"
+local function SpecialList(list)
+  local result = {}
   for key, e in pairs(GG.db.entries) do
     local notes = GG:SortedNotes(e)
-    if GG:IsWatch(e) and #notes > 0 then
-      list[#list + 1] = { kind = "player", key = key, e = e, notes = notes, tags = GG:EntryTags(e) }
+    if GG:ListOf(e) == list and #notes > 0 then
+      result[#result + 1] = { kind = "player", key = key, e = e, notes = notes, list = list, tags = GG:EntryTags(e) }
     end
   end
-  return list
+  return result
 end
 
 -- Same counting as GG:Top(), plus the claimed entries so the detail panel can list them.
@@ -515,16 +566,14 @@ local function CreateRowRegions(row)
   row.skull:SetSize(14, 14)
   row.skull:SetPoint("RIGHT", row.reward, "LEFT", -2, 0)
   SetSkull(row.skull)
-  -- Watch rows swap the skull for a caution triangle and get a yellow stripe on the left edge.
-  row.caution = row:CreateTexture(nil, "ARTWORK")
-  row.caution:SetSize(14, 14)
-  row.caution:SetPoint("RIGHT", row.reward, "LEFT", -2, 0)
-  row.caution:SetTexture(CAUTION)
+  -- Watch and kudos rows swap the skull for their list icon and get a stripe in the list colour on the left edge.
+  row.listIcon = row:CreateTexture(nil, "ARTWORK")
+  row.listIcon:SetSize(14, 14)
+  row.listIcon:SetPoint("RIGHT", row.reward, "LEFT", -2, 0)
   row.stripe = row:CreateTexture(nil, "ARTWORK")
   row.stripe:SetWidth(3)
   row.stripe:SetPoint("TOPLEFT")
   row.stripe:SetPoint("BOTTOMLEFT")
-  row.stripe:SetColorTexture(WATCH_R, WATCH_G, WATCH_B, 1)
   -- Only name rows show it. The arrows are child buttons, so they take their own clicks and the row still gets the rest.
   row.vote = CreateVoteControl(row, function(value) SendNameVote(row, value) end)
 
@@ -567,12 +616,15 @@ local function SetRowPlayer(row, data)
   -- A tag-only note has no text, so its tag takes the line.
   row.note:SetText(top and (top.text ~= "" and top.text or top.tag) or "")
   row.count:SetText(Plural(#data.notes, "note"))
-  if data.tags then
-    row.bg:SetColorTexture(WATCH_R, WATCH_G, WATCH_B, 0.07)
+  local info = data.list and LISTS[data.list]
+  if info then
+    row.bg:SetColorTexture(info.r, info.g, info.b, 0.07)
+    row.stripe:SetColorTexture(info.r, info.g, info.b, 1)
     row.stripe:Show()
-    row.caution:Show()
+    SetListIcon(row.listIcon, info)
+    row.listIcon:Show()
     row.skull:Hide()
-    row.reward:SetTextColor(WATCH_R, WATCH_G, WATCH_B)
+    row.reward:SetTextColor(info.r, info.g, info.b)
     row.reward:SetText(table.concat(data.tags, ", "))
     row.note:SetWidth(#data.tags > 0 and 140 or 250)
   elseif data.bounty then
@@ -607,11 +659,11 @@ local function InitRow(row, data)
     CreateRowRegions(row)
   end
   row.key, row.entry, row.kind = data.key, data.e, data.kind
-  -- Rows are recycled, so a wanted row first undoes everything a watch or name row changed.
+  -- Rows are recycled, so a wanted row first undoes everything a watch, kudos or name row changed.
   row.bg:SetColorTexture(1, 1, 1, 0.04)
   row.bg:SetShown(data.index % 2 == 0)
   row.stripe:Hide()
-  row.caution:Hide()
+  row.listIcon:Hide()
   row.skull:Hide()
   row.reward:SetTextColor(1, 0.82, 0)
   row.note:SetTextColor(1, 1, 1)
@@ -676,7 +728,7 @@ local function PlayerBlocks(d, e, notes)
     local score = NoteScore(n)
     local text = n.text
     if n.tag then
-      local tag = ("|c%s[%s]|r"):format(WATCH_HEX, n.tag)
+      local tag = ("|c%s[%s]|r"):format((LISTS[GG:ListOf(e)] or LISTS.watch).hex, n.tag)
       text = text ~= "" and (tag .. " " .. text) or tag
     end
     blocks[#blocks + 1] = NoteBlock(d, text, table.concat(parts, " - "), {
@@ -715,7 +767,7 @@ end
 -- Each visible section hangs below the one above it, so a hidden section leaves no gap.
 local function Relayout(d, hasButtons)
   local prev = d.header
-  for _, section in ipairs({ d.bountySec, d.watchSec, d.seenSec, d.addedSec, d.notesSec }) do
+  for _, section in ipairs({ d.bountySec, d.listSec, d.seenSec, d.addedSec, d.notesSec }) do
     if section:IsShown() then
       section:ClearAllPoints()
       section:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -6)
@@ -746,17 +798,21 @@ local function UpdateDetailPlayer(d, el)
   d.info:SetText(strtrim(("%s %s %s"):format(
     e.level and ("lvl " .. e.level) or "", e.race or "", e.class and strlower(e.class) or "")))
 
-  local watch = GG:IsWatch(e)
-  d.watchSec:SetShown(watch)
-  if watch then
+  local info = LISTS[GG:ListOf(e)]
+  d.listSec:SetShown(info ~= nil)
+  if info then
+    SetListIcon(d.listIcon, info)
+    d.listHeading:SetText(info.heading)
+    d.listHeading:SetTextColor(info.r, info.g, info.b)
+    d.listHint:SetText(info.hint)
     local tags = GG:EntryTags(e)
-    d.watchTags:SetText(#tags > 0 and table.concat(tags, ", ") or "No tags")
-    if #tags > 0 then d.watchTags:SetTextColor(WATCH_R, WATCH_G, WATCH_B) else d.watchTags:SetTextColor(0.5, 0.5, 0.5) end
+    d.listTags:SetText(#tags > 0 and table.concat(tags, ", ") or "No tags")
+    if #tags > 0 then d.listTags:SetTextColor(info.r, info.g, info.b) else d.listTags:SetTextColor(0.5, 0.5, 0.5) end
   end
 
   local claimed = e.bounty and (e.bounty.claimedBy or "") ~= "" and e.bounty
-  -- The watch section takes the bounty section's place.
-  d.bountySec:SetShown(not watch and (b or claimed) and true or false)
+  -- The list section takes the bounty section's place.
+  d.bountySec:SetShown(not info and (b or claimed) and true or false)
   if b then
     d.reward:SetText(b.reward)
     d.bountyMeta:SetText("Posted by " .. ColoredName(b.poster))
@@ -772,12 +828,12 @@ local function UpdateDetailPlayer(d, el)
   end
 
   SetNotes(d, ("Notes (%d)"):format(#el.notes), PlayerBlocks(d, e, el.notes))
-  d.bountyButton:SetText(watch and "Move to Wanted" or b and "Remove bounty" or "Post bounty")
+  d.bountyButton:SetText(info and "Move to..." or b and "Remove bounty" or "Post bounty")
   if b then d.claimButton:Enable() else d.claimButton:Disable() end
   d.addedSec:Hide()
   SetShown(d.playerOnly, true)
   SetShown(d.nameOnly, false)
-  d.claimButton:SetShown(not watch)
+  d.claimButton:SetShown(not info)
 end
 
 local function UpdateDetailHunter(d, el)
@@ -789,7 +845,7 @@ local function UpdateDetailHunter(d, el)
   SetHunterColor(d.name, el.name)
   d.info:SetText(el.count == 1 and "1 bounty claimed" or (el.count .. " bounties claimed"))
   d.bountySec:Hide()
-  d.watchSec:Hide()
+  d.listSec:Hide()
   d.seenSec:Hide()
   d.addedSec:Hide()
   SetNotes(d, ("Claimed bounties (%d)"):format(el.count), ClaimBlocks(d, el.claims))
@@ -807,7 +863,7 @@ local function UpdateDetailName(d, el)
   d.info:SetText(strtrim(("%s %s %s"):format(
     e.level and ("lvl " .. e.level) or "", e.race or "", e.class and strlower(e.class) or "")))
   d.bountySec:Hide()
-  d.watchSec:Hide()
+  d.listSec:Hide()
   d.seenSec:Hide()
   d.addedSec:Show()
   d.addedLine:SetText(("Added by %s, %s - score %d"):format(ColoredName(e.by or "?"), GG:Age(e.ts), GG:NameScore(e)))
@@ -823,7 +879,7 @@ local function UpdateDetail(d, el)
     SetShown(d.playerOnly, false)
     SetShown(d.nameOnly, false)
     d.bountySec:Hide()
-    d.watchSec:Hide()
+    d.listSec:Hide()
     d.seenSec:Hide()
     d.addedSec:Hide()
     d.hint:Show()
@@ -901,16 +957,17 @@ local function BuildToolbar(f)
   b = AddIconButton(f, b, "Put a /gg macro on your cursor", ICON .. "INV_Misc_Book_09", nil, function()
     if GG.MakeMacro then GG:MakeMacro() end
   end)
-  b = AddIconButton(f, b, "Add a player by name (on the Watch tab: add to the watch list, on the Names tab: add a nice name)",
+  b = AddIconButton(f, b, "Add a player by name (on the Watch or Kudos tab: add to that list, on the Names tab: add a nice name)",
     nil, "communities-icon-addchannelplus", function(self)
-      if f.tab == TAB_NAMES then GG:PromptNiceName() else GG:PromptAddPlayer(f.tab == TAB_WATCH and "watch" or nil, self) end
+      if f.tab == TAB_NAMES then GG:PromptNiceName() else GG:PromptAddPlayer(TAB_LIST[f.tab], self) end
     end)
-  AddIconButton(f, b, "Note your target (on the Watch tab: add to the watch list, on the Names tab: add a nice name)",
+  AddIconButton(f, b, "Note your target (on the Watch or Kudos tab: add to that list, on the Names tab: add a nice name)",
     ICON .. "Ability_Hunter_SniperShot", nil, function(self)
       local full = UnitIsPlayer("target") and GG:UnitFullName("target")
       if not full then return GG:Print("Target a player first.") end
       if f.tab == TAB_NAMES then return GG:AddNiceName(full, "target") end
-      if f.tab == TAB_WATCH then GG:PromptWatchNote(full, "target", self) else GG:PromptNote(full, "target") end
+      local list = TAB_LIST[f.tab]
+      if list then GG:PromptListNote(list, full, "target", self) else GG:PromptNote(full, "target") end
     end)
 end
 
@@ -1004,19 +1061,17 @@ local function CreateBountySection(d)
   d.bountyMeta = Label(s, "GameFontDisableSmall", PAD, -34, CONTENT_W)
 end
 
-local function CreateWatchSection(d)
+-- The section for the watch and kudos lists. UpdateDetailPlayer fills in the icon, heading, colour and hint.
+local function CreateListSection(d)
   local s = CreateSection(d, 62)
-  d.watchSec = s
-  d.watchIcon = s:CreateTexture(nil, "ARTWORK")
-  d.watchIcon:SetSize(14, 14)
-  d.watchIcon:SetPoint("TOPLEFT", PAD, -1)
-  d.watchIcon:SetTexture(CAUTION)
-  local heading = s:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  heading:SetPoint("LEFT", d.watchIcon, "RIGHT", 4, 0)
-  heading:SetTextColor(WATCH_R, WATCH_G, WATCH_B)
-  heading:SetText("Watch list")
-  d.watchTags = Label(s, "GameFontHighlight", PAD, -20, CONTENT_W)
-  Label(s, "GameFontDisableSmall", PAD, -46, CONTENT_W):SetText("Warns you when they join your group.")
+  d.listSec = s
+  d.listIcon = s:CreateTexture(nil, "ARTWORK")
+  d.listIcon:SetSize(14, 14)
+  d.listIcon:SetPoint("TOPLEFT", PAD, -1)
+  d.listHeading = s:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  d.listHeading:SetPoint("LEFT", d.listIcon, "RIGHT", 4, 0)
+  d.listTags = Label(s, "GameFontHighlight", PAD, -20, CONTENT_W)
+  d.listHint = Label(s, "GameFontDisableSmall", PAD, -46, CONTENT_W)
 end
 
 local function CreateSeenSection(d)
@@ -1120,7 +1175,7 @@ end
 local function CreateDetailWidgets(d)
   CreateHeader(d)
   CreateBountySection(d)
-  CreateWatchSection(d)
+  CreateListSection(d)
   CreateSeenSection(d)
   CreateAddedSection(d)
   CreateNotesSection(d)
@@ -1157,13 +1212,14 @@ local function BuildDetail(f)
   d.addButton = AddDetailButton(d, 6, 80, "Add note", function()
     local e = d.entry
     if not e then return end
-    if GG:IsWatch(e) then GG:PromptWatchNote(e.name, nil, d.addButton) else GG:PromptNote(e.name) end
+    local list = GG:ListOf(e)
+    if list ~= "wanted" then GG:PromptListNote(list, e.name, nil, d.addButton) else GG:PromptNote(e.name) end
   end)
   d.bountyButton = AddDetailButton(d, 92, 112, "Post bounty", function()
     local e = d.entry
     if not e then return end
-    if GG:IsWatch(e) then
-      GG:SetList(e.name, "wanted")
+    if GG:ListOf(e) ~= "wanted" then
+      ShowMoveMenu(e, d.bountyButton)
     elseif GG:ActiveBounty(e) then GG:ClearBounty(e.name) else GG:PromptBounty(e.name) end
   end)
   d.claimButton = AddDetailButton(d, 210, 80, "Claim", function()
@@ -1175,10 +1231,23 @@ local function BuildDetail(f)
   f.detail = d
 end
 
+-- PanelTemplates_SetNumTabs chains every tab to the one before it, so Watch, Kudos and Names would sit next to Hunters.
+-- This pins that right group to the bottom right corner instead. The chained anchors go first, or they would fight the new ones.
+-- PanelTemplates_SetTab and tab resizing only change textures and widths, so this runs once, after SetNumTabs.
+local function AnchorRightTabs(f, tabs)
+  for i = TAB_WATCH, TAB_NAMES do tabs[i]:ClearAllPoints() end
+  tabs[TAB_NAMES]:SetPoint("TOPRIGHT", f, "BOTTOMRIGHT", -5, 2)
+  for i = TAB_NAMES - 1, TAB_WATCH, -1 do
+    tabs[i]:SetPoint("TOPRIGHT", tabs[i + 1], "TOPLEFT", -3, 0)
+  end
+end
+
 local function BuildTabs(f)
   f.tab = 1
+  local tabs = {}
   for i, label in ipairs(TABS) do
     local t = CreateFrame("Button", "GuildGrudgeFrameTab" .. i, f, "PanelTabButtonTemplate")
+    tabs[i] = t
     t:SetID(i)
     t:SetText(label)
     if i == 1 then t:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 5, 2) end
@@ -1190,6 +1259,7 @@ local function BuildTabs(f)
     end)
   end
   PanelTemplates_SetNumTabs(f, #TABS)
+  AnchorRightTabs(f, tabs)
   PanelTemplates_SetTab(f, 1)
 end
 
@@ -1258,7 +1328,7 @@ function GG:RefreshUI()
   local tab = frame.tab
   local all
   if tab == TAB_HUNTERS then all = HunterList()
-  elseif tab == TAB_WATCH then all = WatchList()
+  elseif TAB_LIST[tab] then all = SpecialList(TAB_LIST[tab])
   elseif tab == TAB_NAMES then all = NameList()
   else all = WantedList(tab == TAB_BOUNTIES) end
   local settings = GG.db.settings
@@ -1319,8 +1389,9 @@ local function AddUnitMenuItems(_, root, ctx)
   root:CreateButton("Add grudge note...", function() GG:PromptNote(name, unit) end)
   root:CreateButton("Post bounty...", function() GG:PromptBounty(name) end)
   -- A button with child buttons is a submenu, as Blizzard builds them.
-  local watch = root:CreateButton("Add to watch list")
-  AddTagButtons(watch, function(tag) AskWatchNote(name, unit, tag) end)
+  for _, list in ipairs(SPECIAL) do
+    AddTagButtons(root:CreateButton(LISTS[list].menu), list, function(tag) AskListNote(list, name, unit, tag) end)
+  end
   root:CreateButton("Add to nice names", function() GG:AddNiceName(name, unit) end)
 end
 
@@ -1336,10 +1407,11 @@ local function OnTooltipUnit(tt)
   local e = GG:GetEntry(GG:UnitFullName(unit), false)
   if not e or not GG:IsListed(e) then return end
   local n = #GG:SortedNotes(e)
-  if GG:IsWatch(e) then
-    tt:AddLine(("|c%sWatch list:|r %d note%s"):format(WATCH_HEX, n, n == 1 and "" or "s"))
+  local info = LISTS[GG:ListOf(e)]
+  if info then
+    tt:AddLine(("|c%s%s|r %d note%s"):format(info.hex, info.tip, n, n == 1 and "" or "s"))
     local tags = GG:EntryTags(e)
-    if #tags > 0 then tt:AddLine(("|c%s[%s]|r"):format(WATCH_HEX, table.concat(tags, "] ["))) end
+    if #tags > 0 then tt:AddLine(("|c%s[%s]|r"):format(info.hex, table.concat(tags, "] ["))) end
     tt:Show()
     return
   end

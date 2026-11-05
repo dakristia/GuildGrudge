@@ -7,7 +7,7 @@
 --   G^1^key^name^^voter^v^ts                                a vote on a nice name (v = 1, -1 or 0 for removed)
 --   S^1^key^name^^class^zone                                "I just spotted this player"
 --   P^1^key^name^^class^raceFile^race^sex^level^ts          a player's class, race, sex and level (newest ts wins)
---   L^1^key^name^^list^ts                                   which list a player is on (list = watch or wanted; newest ts wins)
+--   L^1^key^name^^list^ts                                   which list a player is on (list = wanted, watch or kudos; newest ts wins)
 --   F^1^key^name^^by^ts^deleted^class^race^raceFile^sex^level  a nice name (added or removed; newest ts wins)
 --   H^1^since                                               "send me everything newer than <since>"
 --   D^1^requester                                           "I'm answering that request, others can relax"
@@ -234,8 +234,8 @@ handlers.L = function(t)
   local e = GG:GetEntry(t[4], false)
   local list, ts = t[6], tonumber(t[7])
   if not e or not ts or ts <= (e.listTs or 0) then return end
-  if list ~= "watch" and list ~= "wanted" then return end
-  e.list = list == "watch" and "watch" or nil
+  if list ~= "watch" and list ~= "kudos" and list ~= "wanted" then return end
+  e.list = list ~= "wanted" and list or nil
   e.listTs = ts
   GG:Changed()
 end

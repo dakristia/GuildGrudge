@@ -29,9 +29,10 @@ local function printTopNotes(self, e)
   end
 end
 
-local function tagText(self, e)
+-- color: the colour code of the list the tags belong to (yellow for the watch list)
+local function tagText(self, e, color)
   local s = ""
-  for _, tag in ipairs(self:EntryTags(e)) do s = s .. " |cffffcc00[" .. tag .. "]|r" end
+  for _, tag in ipairs(self:EntryTags(e)) do s = s .. " |c" .. (color or "ffffcc00") .. "[" .. tag .. "]|r" end
   return s
 end
 
@@ -52,6 +53,11 @@ function GG:WatchAlert(e)
   printTopNotes(self, e)
 end
 
+-- A friendly chat line: no raid warning, no sound.
+function GG:KudosJoined(e)
+  self:Print("|cff4dff66Kudos:|r " .. self:ColorName(e) .. " joined your group" .. tagText(self, e, "ff4dff66"))
+end
+
 function GG:Spotted(name, unit)
   local e, key = self:GetEntry(name, false)
   if not e or not self:IsListed(e) then return end
@@ -64,9 +70,10 @@ function GG:Spotted(name, unit)
   local now = GetTime()
   local quiet = (lastSighting[key] or -math.huge) + self.db.settings.alertCooldown <= now
   lastSighting[key] = now
-  if self:IsWatch(e) then
+  -- Watch and kudos players never raise the alert and are not shared; kudos players are not announced at all.
+  if self:ListOf(e) ~= "wanted" then
     if not quiet then return end
-    if self.db.settings.watchNearby then
+    if self:IsWatch(e) and self.db.settings.watchNearby then
       self:Print(self:ColorName(e) .. " from your watch list is nearby" .. tagText(self, e))
     end
     return self:Changed()
@@ -81,7 +88,7 @@ function GG:Spotted(name, unit)
   self:Changed()
 end
 
--- Warn once when a watch-list player joins the group; leaving and rejoining warns again.
+-- Warn once when a watch-list player joins the group (kudos players get a friendly line); leaving and rejoining repeats it.
 function GG:CheckGroup()
   local current = {}
   local function add(unit)
@@ -90,9 +97,10 @@ function GG:CheckGroup()
     current[full] = true
     if lastGroup[full] then return end
     local e = self:GetEntry(full, false)
-    if e and self:IsWatch(e) and self:IsListed(e) then
+    if e and self:ListOf(e) ~= "wanted" and self:IsListed(e) then
       self:Learn(e, unit)
-      if self.db.settings.watchGroup then self:WatchAlert(e) end
+      if self:IsWatch(e) and self.db.settings.watchGroup then self:WatchAlert(e) end
+      if self:IsKudos(e) and self.db.settings.kudosGroup then self:KudosJoined(e) end
     end
   end
   if IsInRaid() then

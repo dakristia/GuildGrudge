@@ -633,13 +633,177 @@ end)
 
 test("KnownTags lists the suggestions first, then custom tags from notes", function()
   local a, b = unpack(guild(2))
-  eq(#b.ns:KnownTags(), #b.ns.TAGS, "only suggestions")
-  a.ns:AddNote("Gankmaster", "spams", nil, { tag = "Annoying" })
+  eq(#b.ns:KnownTags("watch"), #b.ns.TAGS.watch, "only suggestions")
+  a.ns:AddNote("Gankmaster", "spams", nil, { tag = "Annoying", list = "watch" })
   W.advance(2)
-  local tags = b.ns:KnownTags()
+  local tags = b.ns:KnownTags("watch")
   eq(tags[1], "Ninja looter", "suggestions first")
   eq(tags[#tags], "Annoying", "custom tag last")
   eq(b.ns:EntryTags(b.ns.db.entries["gankmaster"])[1], "Annoying")
+end)
+
+---------------------------------------------------------------------------
+-- Kudos list
+---------------------------------------------------------------------------
+test("a kudos note syncs with its tag and list", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "kudos Helper healed us through the whole run")
+  a.ns:AddNote("Helper", "", nil, { tag = "Great healer" })
+  W.advance(3)
+  local e = b.ns.db.entries["helper"]
+  assert(b.ns:IsKudos(e), "B has her on the kudos list")
+  eq(b.ns:ListOf(e), "kudos")
+  eq(e.listTs, a.ns.db.entries["helper"].listTs)
+  eq(firstNote(b, "helper").tag, "Great healer")
+  eq(W.log.types.L, 1, "one L message")
+  noErrors(a); noErrors(b)
+end)
+
+test("an unknown list in an L message is ignored, kudos is accepted", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE", "L^1^gankmaster^Gankmaster^^kudos^" .. (W.serverTime + 10), "GUILD")
+  eq(b.ns:ListOf(b.ns.db.entries["gankmaster"]), "kudos")
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE", "L^1^gankmaster^Gankmaster^^bogus^" .. (W.serverTime + 20), "GUILD")
+  eq(b.ns:ListOf(b.ns.db.entries["gankmaster"]), "kudos", "bogus list ignored")
+end)
+
+test("SetBounty is refused on a kudos entry", function()
+  local a = guild(1)[1]
+  W.slash(a, "kudos Helper healed us")
+  a.chat = {}
+  W.slash(a, "bounty Helper 50g")
+  eq(a.ns:ActiveBounty(a.ns.db.entries["helper"]), nil, "no bounty")
+  assert(chatHas(a, "Bounties are only for the Wanted list."), "message: " .. table.concat(a.chat, " / "))
+end)
+
+test("SetList moves between all three lists and syncs", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  for _, list in ipairs({ "kudos", "watch", "kudos", "wanted" }) do
+    W.serverTime = W.serverTime + 10
+    a.ns:SetList("Gankmaster", list)
+    W.advance(2)
+    eq(a.ns:ListOf(a.ns.db.entries["gankmaster"]), list, "A on " .. list)
+    eq(b.ns:ListOf(b.ns.db.entries["gankmaster"]), list, "B on " .. list)
+  end
+  eq(a.ns.db.entries["gankmaster"].list, nil, "Wanted is stored as nil")
+  a.chat = {}
+  a.ns:SetList("Gankmaster", "bogus")
+  assert(chatHas(a, "Usage: /gg move"), "usage: " .. table.concat(a.chat, " / "))
+end)
+
+test("moving off Wanted is refused with an open bounty, for watch and kudos", function()
+  local a = guild(1)[1]
+  W.slash(a, "bounty Gankmaster 50g")
+  for _, list in ipairs({ "watch", "kudos" }) do
+    a.chat = {}
+    a.ns:SetList("Gankmaster", list)
+    eq(a.ns:ListOf(a.ns.db.entries["gankmaster"]), "wanted", "still wanted after " .. list)
+    assert(chatHas(a, "first. Bounties are only for the Wanted list."), "message: " .. table.concat(a.chat, " / "))
+  end
+end)
+
+test("/gg move <name> kudos works, and with no list still toggles Wanted and watch", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "add Gankmaster rude")
+  W.advance(2)
+  W.serverTime = W.serverTime + 10
+  W.slash(a, "move Gankmaster kudos")
+  W.advance(2)
+  assert(a.ns:IsKudos(a.ns.db.entries["gankmaster"]), "A on kudos")
+  assert(b.ns:IsKudos(b.ns.db.entries["gankmaster"]), "B on kudos")
+  W.serverTime = W.serverTime + 10
+  W.slash(a, "move Gankmaster")
+  eq(a.ns:ListOf(a.ns.db.entries["gankmaster"]), "wanted", "kudos with no list goes to Wanted")
+  W.serverTime = W.serverTime + 10
+  W.slash(a, "move Gankmaster")
+  eq(a.ns:ListOf(a.ns.db.entries["gankmaster"]), "watch", "Wanted toggles to watch")
+  a.chat = {}
+  W.slash(a, "move Gankmaster nonsense")
+  assert(chatHas(a, "Usage: /gg move"), "usage: " .. table.concat(a.chat, " / "))
+  eq(a.ns:ListOf(a.ns.db.entries["gankmaster"]), "watch", "unchanged")
+  noErrors(a); noErrors(b)
+end)
+
+test("/gg move <first> <surname> <list> parses a two-part name", function()
+  local a = forever("Me", "Myself")
+  W.slash(a, "add Ana Forever rude")
+  W.slash(a, "move Ana Forever kudos")
+  eq(a.ns:ListOf(a.ns:Find("Ana Forever")), "kudos")
+  noErrors(a)
+end)
+
+test("KnownTags('kudos') gives the kudos presets and custom kudos tags, but no watch tags", function()
+  local a, b = unpack(guild(2))
+  eq(#b.ns:KnownTags("kudos"), #b.ns.TAGS.kudos, "only suggestions")
+  a.ns:AddNote("Helper", "", nil, { tag = "Cheerful", list = "kudos" })
+  a.ns:AddNote("Gankmaster", "", nil, { tag = "Annoying", list = "watch" })
+  a.ns:AddNote("Thief", "", nil, { tag = "Sneaky" })
+  W.advance(4)
+  local tags = b.ns:KnownTags("kudos")
+  eq(tags[1], "Helpful", "presets first")
+  eq(tags[#tags], "Cheerful", "custom kudos tag last")
+  eq(#tags, #b.ns.TAGS.kudos + 1, "no watch or wanted tags")
+  local watch = b.ns:KnownTags("watch")
+  eq(watch[#watch], "Annoying", "custom watch tag")
+  eq(#watch, #b.ns.TAGS.watch + 1, "no kudos or wanted tags")
+  for _, tag in ipairs(watch) do assert(tag ~= "Cheerful" and tag ~= "Helpful", "kudos tag in watch: " .. tag) end
+end)
+
+test("a kudos player joining the group gives a friendly chat line and no raid warning", function()
+  local a = guild(1)[1]
+  a.ns:AddNote("Helper", "healed us", nil, { tag = "Great healer", list = "kudos" })
+  a.chat = {}
+  a.units = { party1 = { name = "Helper", class = "WARRIOR" } }
+  W.fire(a, "GROUP_ROSTER_UPDATE")
+  assert(chatHas(a, "|cff4dff66Kudos:|r"), "kudos line: " .. table.concat(a.chat, " / "))
+  assert(chatHas(a, "joined your group"), "joined")
+  assert(chatHas(a, "|cff4dff66[Great healer]|r"), "green tag")
+  assert(not chatHas(a, "RW: "), "no raid warning")
+  a.chat = {}
+  W.fire(a, "GROUP_ROSTER_UPDATE")
+  eq(#a.chat, 0, "no second line")
+  noErrors(a)
+end)
+
+test("a kudos player joining the group gives nothing with kudosGroup off", function()
+  local a = guild(1)[1]
+  a.ns:AddNote("Helper", "healed us", nil, { list = "kudos" })
+  a.ns.db.settings.kudosGroup = false
+  a.chat = {}
+  a.units = { party1 = { name = "Helper", class = "WARRIOR" } }
+  W.fire(a, "GROUP_ROSTER_UPDATE")
+  eq(#a.chat, 0, "silent")
+  noErrors(a)
+end)
+
+test("a kudos player nearby gives nothing, even with watchNearby on", function()
+  local a = guild(1)[1]
+  a.ns:AddNote("Helper", "healed us", nil, { list = "kudos" })
+  a.ns.db.settings.watchNearby = true
+  a.chat = {}
+  sight(a, { name = "Helper" })
+  eq(#a.chat, 0, "no chat line, no raid warning")
+  eq(W.log.types.S, nil, "nothing shared with the guild")
+  noErrors(a)
+end)
+
+test("Top only counts Wanted entries", function()
+  local a = guild(1)[1]
+  W.slash(a, "add Gankmaster rude")
+  a.ns:AddNote("Helper", "healed us", nil, { list = "kudos" })
+  a.chat = {}
+  W.slash(a, "top")
+  local out = table.concat(a.chat, "\n")
+  assert(out:find("Gankmaster", 1, true), "wanted listed")
+  assert(not out:find("Helper", 1, true), "kudos not listed")
+end)
+
+test("the kudosGroup setting defaults to on", function()
+  eq(guild(1)[1].ns.db.settings.kudosGroup, true)
 end)
 
 test("MaxTs counts listTs", function()

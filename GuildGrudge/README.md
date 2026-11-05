@@ -19,7 +19,8 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 | `/gg show <name>` | Print everything on a player |
 | `/gg del <name>` | Remove your own notes on a player |
 | `/gg watch <first> <surname> <note>` | Add a note on the watch list |
-| `/gg move <name>` | Move a player between the Wanted list and the watch list |
+| `/gg kudos <first> <surname> <note>` | Add a note on the kudos list (good players) |
+| `/gg move <name> [wanted\|watch\|kudos]` | Move a player to a list. With no list, switches between Wanted and watch |
 | `/gg bounty <first> <surname> <reward>` | Post a bounty (e.g. `50g and eternal glory`) |
 | `/gg unbounty <name>` | Remove a bounty |
 | `/gg claim <name>` | Claim a bounty manually |
@@ -42,6 +43,7 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 - **Detection:** nameplates, target and mouseover. Forever blocks addons from the combat log, so a ganker you never see a nameplate for is not detected. Turn enemy nameplates on (`V`). Alerts have a 60-second cooldown per player.
 - **Bounties:** getting the killing blow on a player with an open bounty (the `PARTY_KILL` event) claims it and posts in guild chat.
 - **Watch list:** for friendly players you want to keep an eye on (ninja looters, scammers). Pick the list when you add a player, and give a note a tag such as "Ninja looter". Watch-list players only warn you when they join your group (and optionally with a chat line when nearby), and they cannot have bounties.
+- **Kudos list:** the opposite of the watch list, for good players (kind, helpful, skilled). Notes can have tags such as "Great healer". Kudos players get a friendly chat line when they join your group (a setting turns it off), no alerts, no sightings shared and no bounties. Right-click a player's portrait and pick Add kudos, or use `/gg kudos`. Players on the Watch and Kudos tabs can be moved to any list with Move to.
 - **Nice names:** a guild-shared list of funny character names, on the Names tab. No notes, alerts or bounties. Right-click a player's portrait and pick Add to nice names, or use `/gg nice`. Anyone can remove a name. It is kept apart from the grudge lists.
 - **Name votes:** nice names can be voted up or down with the arrows at the right edge of a Names row, like notes. You can't vote on a name you added. Votes sync with the guild.
 - **Sorting:** the dropdown next to the search box orders every tab by newest, oldest, A-Z or most votes. Hunters are ranked by their number of claims under "Most votes".

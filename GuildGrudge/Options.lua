@@ -131,6 +131,8 @@ local function RegisterSettings()
     "Print a chat line when someone from your watch list is near you. There is no warning on screen.")
   Checkbox("watchGroup", "Watch list: warn when they join your group",
     "Show a warning when someone from your watch list joins your party or raid.")
+  Checkbox("kudosGroup", "Kudos list: tell me when they join your group",
+    "Print a friendly chat line when someone from your kudos list joins your party or raid.")
   Checkbox("minimapButton", "Show minimap button", "Show the Guild Grudge button on the minimap.",
     function() GG:UpdateMinimapButton() end)
   -- The sort order has no entry here: it needs Settings.CreateDropdown, which this file does not use yet. Use the window's dropdown.
