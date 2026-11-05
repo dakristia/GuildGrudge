@@ -662,12 +662,13 @@ local function StyleArrow(button, active, r, g, b)
   if tex then
     if active then tex:SetVertexColor(r, g, b) else tex:SetVertexColor(1, 1, 1) end
   end
-  button:SetAlpha(active and 1 or 0.5)
+  button:SetAlpha(active and 1 or 0.85)
 end
 
 local function CreateArrow(parent, atlas, value, el)
   local b = CreateFrame("Button", nil, parent)
-  b:SetSize(15, 10)
+  -- The arrow art is 17x11, so a smaller button blurs it.
+  b:SetSize(17, 11)
   if b.SetNormalAtlas then b:SetNormalAtlas(atlas) end
   if b.SetHighlightAtlas then b:SetHighlightAtlas(atlas) end
   b:SetScript("OnClick", function() SendVote(el, value) end)
