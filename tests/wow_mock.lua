@@ -57,7 +57,7 @@ function M.newClient(opts)
         or (opts.name .. (opts.realm and ("-" .. opts.realm) or ""))
   c.guid = "Player-" .. c.full
   -- How the server spells this character in chat events and the guild roster.
-  -- Unconfirmed for Forever, so tests try both "Ana Smith" and "Ana-Smith".
+  -- The live client sends "Ana Smith" for whispers and the roster. Tests still try "Ana-Smith" too.
   c.wire = opts.wire or c.full
   local forbidEvents = opts.forbidEvents or (opts.forever and { COMBAT_LOG_EVENT_UNFILTERED = true })
   local env = {}
@@ -206,8 +206,9 @@ function M.send(c, prefix, msg, channel, target)
   th.left = th.left - 1
   for _, other in ipairs(M.clients) do
     local hit
-    if channel == "GUILD" then hit = true
-    elseif channel == "WHISPER" then hit = other ~= c and (target == other.wire or target == other.full) end
+    -- The live client doesn't echo GUILD messages to the sender, but does deliver a whisper to yourself.
+    if channel == "GUILD" then hit = other ~= c
+    elseif channel == "WHISPER" then hit = target == other.wire or target == other.full end
     if hit and other.online ~= false then
       M.log.delivered = M.log.delivered + 1
       M.fire(other, "CHAT_MSG_ADDON", prefix, msg, channel, c.wire, target or "", 0, 0)

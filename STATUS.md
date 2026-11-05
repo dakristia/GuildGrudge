@@ -23,11 +23,18 @@ The addon is installed by symlink: `~/source/repos/wow/_forever_/Interface/AddOn
   - `PARTY_KILL` claims a bounty, and a kill by someone else doesn't
   - chat escape codes in incoming messages are stripped
 
+## Proven in the live game (5 November, one account)
+- The addon loads through the symlink, and `/gg debug` runs without errors.
+- `UnitName("player")` returns the first name and the surname as two values. Roster names are `First Surname` with a space.
+- An addon whisper to `First Surname` arrives, and its sender is `First Surname`. A whisper to yourself is delivered too.
+- A `GUILD` addon message is sent (result 0) but is not echoed back to the sender.
+- The combat log guard is correct (`combat log API: no`).
+
 ## Unproven (needs the live game)
 These are ordered by risk. The `/gg debug` line that answers each one is in brackets.
 
-1. **Sender and roster name format.** The code accepts `First Surname` and `First-Surname`. If Forever sends only the first name, sync and the guild filter break. [`roster[1]`, `last sender`]
-2. **Addon whispers without realms.** The login sync answers by whisper. If whispers don't arrive, a newcomer gets nothing; the fallback is `GUILD` in `DumpTo` (`Sync.lua`). [`entries` on the newcomer stays 0]
+1. **`GUILD` sender format.** No echo means this needs a second player. It is very likely `First Surname`, the same as whispers. [`last sender` on the receiving account]
+2. **Login sync end to end.** A self-whisper works, so a whisper to a guildie very likely works too. [`entries` on the newcomer stays 0]
 3. **`PARTY_KILL` in open-world PvP.** Unknown whether it fires for your own kills. Without it, bounties need `/gg claim`. [`PARTY_KILL seen`]
 4. **`GetPlayerInfoByGUID` name parts.** This is the fallback for a kill on someone you never had a nameplate for. Its 7th return value may be empty, a surname or a realm.
 5. **Registering `COMBAT_LOG_EVENT_UNFILTERED`.** The addon skips it on Forever, so this only matters if the guard is wrong. [`combat log API: no`]
