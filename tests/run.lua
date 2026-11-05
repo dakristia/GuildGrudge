@@ -291,6 +291,20 @@ test("nameplate of a listed player raises an alert", function()
   noErrors(a)
 end)
 
+test("a player running in and out of view alerts once, until unseen for the cooldown", function()
+  local a = nameplateAlert({ name = "Me", surname = "Myself", forever = true })
+  local function alertsAfter(seconds)
+    W.advance(seconds)
+    a.chat = {}
+    W.fire(a, "NAME_PLATE_UNIT_ADDED", "nameplate1")
+    return table.concat(a.chat, "\n"):find("is nearby") ~= nil
+  end
+  assert(not alertsAfter(40), "no alert 40s after the first")
+  assert(not alertsAfter(40), "no alert 80s after the first, seen 40s ago")
+  assert(alertsAfter(61), "alert again after 61s out of view")
+  noErrors(a)
+end)
+
 -- Forever: CombatLogGetCurrentEventInfo is nil and COMBAT_LOG_EVENT_UNFILTERED
 -- is restricted. Whether RegisterEvent throws is unconfirmed, so the mock throws.
 test("Forever combat log: nameplate alerts use the new raid-warning API", function()

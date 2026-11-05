@@ -6,7 +6,7 @@
 -- have CombatLogGetCurrentEventInfo (Classic Era).
 local ADDON, GG = ...
 
-local lastAlert, lastShare = {}, {}
+local lastSighting, lastShare = {}, {}
 
 function GG:Alert(e)
   if not self.db.settings.alerts then return end
@@ -36,9 +36,12 @@ function GG:Spotted(name, unit)
   if unit then self:Learn(e, unit) end -- class/race/level/GUID when we have a real unit
   e.lastSeen, e.lastSeenZone, e.lastSeenBy = self:Now(), self:Zone(), self:Me()
 
+  -- Every sighting restarts the cooldown, so a player who keeps running in and
+  -- out of view alerts once, and again only after being unseen for a while.
   local now = GetTime()
-  if (lastAlert[key] or 0) + self.db.settings.alertCooldown > now then return end
-  lastAlert[key] = now
+  local quiet = (lastSighting[key] or -math.huge) + self.db.settings.alertCooldown <= now
+  lastSighting[key] = now
+  if not quiet then return end
   self:Alert(e)
 
   if self.db.settings.shareSpotted and IsInGuild() and (lastShare[key] or 0) + 120 < now then
