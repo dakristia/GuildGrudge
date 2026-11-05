@@ -246,6 +246,17 @@ test("Forever kill: PARTY_KILL resolves an unseen GUID with GetPlayerInfoByGUID"
   eq(a.ns:Find("Ana Forever").bounty.claimedBy, "Me Myself")
 end)
 
+test("a nameplate sighting of a listed player stores raceFile and sex", function()
+  local a = forever("Me", "Myself")
+  W.slash(a, "bounty Ana Forever 50g")
+  a.units = { nameplate1 = { name = "Ana", second = "Forever", race = "Undead", raceFile = "Scourge", sex = 3 } }
+  W.fire(a, "NAME_PLATE_UNIT_ADDED", "nameplate1")
+  local e = a.ns:Find("Ana Forever")
+  eq(e.raceFile, "Scourge")
+  eq(e.sex, 3)
+  noErrors(a)
+end)
+
 test("Forever: /gg debug prints the name formats the live client uses", function()
   local a = forever("Ana", "Smith", "Ana-Smith")
   local b = forever("Bob", "Stone", "Bob-Stone")

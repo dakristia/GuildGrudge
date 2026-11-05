@@ -132,6 +132,68 @@ local function SetClassIcon(tex, e)
   end
 end
 
+-- A portrait can only be drawn for a unit that exists right now, so look for one the player can see.
+local PORTRAIT_UNITS = { "target", "focus", "mouseover" }
+for i = 1, 40 do PORTRAIT_UNITS[#PORTRAIT_UNITS + 1] = "nameplate" .. i end
+
+local function FindUnit(key)
+  if not UnitExists or not UnitIsPlayer then return nil end
+  for _, token in ipairs(PORTRAIT_UNITS) do
+    if UnitExists(token) and UnitIsPlayer(token) then
+      local full = GG:UnitFullName(token)
+      if full and GG:MakeKey(full) == key then return token end
+    end
+  end
+end
+
+-- Blizzard's GetRaceAtlas wants the lowercase race file and "male" or "female", and returns e.g. "raceicon-undead-female".
+-- Nil when the race or sex is unknown or the client has no such atlas.
+local function RaceAtlas(e)
+  if not (GetRaceAtlas and e.raceFile and e.sex) then return nil end
+  local atlas = GetRaceAtlas(strlower(e.raceFile), e.sex == 3 and "female" or "male")
+  if C_Texture and C_Texture.GetAtlasInfo and not C_Texture.GetAtlasInfo(atlas) then return nil end
+  return atlas
+end
+
+-- The character creation screen clips race icons with this round mask, so the rows do the same.
+-- The mask is added only for race icons, so the class icon and the question mark stay as they are.
+local function SetRaceMask(tex, on)
+  local parent = tex.GetParent and tex:GetParent()
+  if on and not tex.raceMask and parent and parent.CreateMaskTexture then
+    local mask = parent:CreateMaskTexture()
+    mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    mask:SetAllPoints(tex)
+    tex.raceMask = mask
+  end
+  local mask = tex.raceMask
+  if not mask then return end
+  if on then tex:AddMaskTexture(mask) else tex:RemoveMaskTexture(mask) end
+end
+
+-- One picture for the list rows and the detail header, best source first:
+-- live portrait, then race and sex icon (both with a class badge), then class icon, then a question mark.
+local function SetPicture(portrait, icon, badge, e, key)
+  local token = SetPortraitTexture and FindUnit(key)
+  local raceAtlas = not token and RaceAtlas(e)
+  if token then
+    SetPortraitTexture(portrait, token)
+    portrait:Show()
+    icon:Hide()
+  else
+    portrait:Hide()
+    icon:Show()
+    SetRaceMask(icon, raceAtlas and true or false)
+    if raceAtlas then icon:SetAtlas(raceAtlas) else SetClassIcon(icon, e) end
+  end
+  -- The portrait and the race icon both hide the class, so the badge adds it back; an unknown class gets no badge.
+  if (token or raceAtlas) and e.class then
+    SetClassIcon(badge, e)
+    badge:Show()
+  else
+    badge:Hide()
+  end
+end
+
 -- Bounties are free text, so a skull marks them instead of a gold coin.
 -- SetRaidTargetIconTexture only sets the texture coordinates, so the sheet is set first, as the nameplate XML does.
 local function SetSkull(tex)
@@ -239,6 +301,13 @@ local function CreateRowRegions(row)
   row.icon = row:CreateTexture(nil, "ARTWORK")
   row.icon:SetSize(28, 28)
   row.icon:SetPoint("LEFT", 6, 0)
+  row.portrait = row:CreateTexture(nil, "ARTWORK")
+  row.portrait:SetSize(28, 28)
+  row.portrait:SetPoint("LEFT", 6, 0)
+  -- OVERLAY draws above ARTWORK, so the badge sits on top of the picture corner.
+  row.badge = row:CreateTexture(nil, "OVERLAY")
+  row.badge:SetSize(12, 12)
+  row.badge:SetPoint("TOPRIGHT", row.icon, "TOPRIGHT", 3, 3)
   row.hunterIcon = row:CreateTexture(nil, "ARTWORK")
   row.hunterIcon:SetSize(28, 28)
   row.hunterIcon:SetPoint("LEFT", 6, 0)
@@ -278,6 +347,8 @@ end
 
 local function SetRowHunter(row, data)
   row.icon:Hide()
+  row.portrait:Hide()
+  row.badge:Hide()
   row.hunterIcon:Show()
   row.name:SetText(("%d. %s"):format(data.index, data.name))
   SetHunterColor(row.name, data.name)
@@ -291,9 +362,8 @@ end
 
 local function SetRowPlayer(row, data)
   local e = data.e
-  row.icon:Show()
   row.hunterIcon:Hide()
-  SetClassIcon(row.icon, e)
+  SetPicture(row.portrait, row.icon, row.badge, e, data.key)
   row.name:SetText(e.name)
   row.name:SetTextColor(ClassRGB(e))
   row.info:SetText(InfoText(e))
@@ -416,35 +486,11 @@ local function Relayout(d, hasButtons)
   d.notesSec:SetPoint("BOTTOMRIGHT", d, "BOTTOMRIGHT", 0, hasButtons and 38 or 10)
 end
 
--- A portrait can only be drawn for a unit that exists right now, so look for one the player can see.
-local PORTRAIT_UNITS = { "target", "focus", "mouseover" }
-for i = 1, 40 do PORTRAIT_UNITS[#PORTRAIT_UNITS + 1] = "nameplate" .. i end
-
-local function FindUnit(key)
-  if not UnitExists or not UnitIsPlayer then return nil end
-  for _, token in ipairs(PORTRAIT_UNITS) do
-    if UnitExists(token) and UnitIsPlayer(token) then
-      local full = GG:UnitFullName(token)
-      if full and GG:MakeKey(full) == key then return token end
-    end
-  end
-end
-
--- Without a visible unit (or without SetPortraitTexture) the class icon stays, as before.
+-- A hunter has no entry, so the icon keeps the atlas that UpdateDetailHunter set.
 local function UpdatePortrait(d)
   local e = d.entry
-  local token = e and SetPortraitTexture and FindUnit(GG:MakeKey(e.name))
-  if token then
-    SetPortraitTexture(d.portrait, token)
-    d.portrait:Show()
-    d.icon:Hide()
-    -- The portrait already hides the class, so the badge adds it back; an unknown class gets no badge.
-    if e.class then
-      SetClassIcon(d.badge, e)
-      d.badge:Show()
-    else
-      d.badge:Hide()
-    end
+  if e then
+    SetPicture(d.portrait, d.icon, d.badge, e, GG:MakeKey(e.name))
   else
     d.portrait:Hide()
     d.badge:Hide()
@@ -455,7 +501,6 @@ end
 local function UpdateDetailPlayer(d, el)
   local e, b = el.e, el.bounty
   d.entry = e
-  SetClassIcon(d.icon, e)
   UpdatePortrait(d)
   d.name:SetText(e.name)
   d.name:SetTextColor(ClassRGB(e))
@@ -486,6 +531,7 @@ end
 
 local function UpdateDetailHunter(d, el)
   d.entry = nil
+  SetRaceMask(d.icon, false)
   d.icon:SetAtlas("friends-icon-favorites")
   UpdatePortrait(d)
   d.name:SetText(el.name)
@@ -870,14 +916,30 @@ local function Build()
 
   f:SetScript("OnShow", function() GG:RefreshUI() end)
 
-  -- Only the portrait depends on these events, so the list is not rebuilt.
+  -- Only the pictures depend on these events, so the list is not rebuilt. Nameplate events come in bursts,
+  -- so the visible rows are refreshed at most once every 0.2 seconds.
+  local rowsPending = false
+  local function RefreshRowPictures()
+    rowsPending = false
+    if not f:IsShown() or not f.box.ForEachFrame then return end
+    f.box:ForEachFrame(function(row, data)
+      if data and data.kind ~= "hunter" then
+        SetPicture(row.portrait, row.icon, row.badge, data.e, data.key)
+      end
+    end)
+  end
   local watcher = CreateFrame("Frame")
   for _, event in ipairs({ "PLAYER_TARGET_CHANGED", "PLAYER_FOCUS_CHANGED", "UPDATE_MOUSEOVER_UNIT",
     "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED", "UNIT_PORTRAIT_UPDATE" }) do
     pcall(watcher.RegisterEvent, watcher, event)
   end
   watcher:SetScript("OnEvent", function()
-    if f:IsShown() and f.detail.entry then UpdatePortrait(f.detail) end
+    if not f:IsShown() then return end
+    if f.detail.entry then UpdatePortrait(f.detail) end
+    if not rowsPending then
+      rowsPending = true
+      C_Timer.After(0.2, RefreshRowPictures)
+    end
   end)
   f:Hide()
   return f

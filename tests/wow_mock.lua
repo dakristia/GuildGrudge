@@ -129,7 +129,8 @@ function M.newClient(opts)
       if unit == "player" then return c.class, c.class end
       local u = c.units and c.units[unit]; if u then return u.class, u.class end
     end,
-    UnitRace = function(unit) local u = c.units and c.units[unit]; return u and u.race end,
+    UnitRace = function(unit) local u = c.units and c.units[unit]; if u then return u.race, u.raceFile end end,
+    UnitSex = function(unit) local u = c.units and c.units[unit]; return u and u.sex or 1 end,
     UnitLevel = function(unit) local u = c.units and c.units[unit]; return u and u.level or 0 end,
     UnitGUID = function(unit)
       if unit == "player" then return c.guid end

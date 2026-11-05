@@ -152,6 +152,7 @@ end
 -- Data model
 -- GuildGrudgeDB.entries[key] = {        -- key = lowercase full name
 --   name, class, race, level,           -- name = "First Surname" (or "Name-Realm")
+--   raceFile, sex,                      -- raceFile = 2nd return of UnitRace ("Scourge"); sex = 2 male | 3 female
 --   lastSeen, lastSeenZone, lastSeenBy,
 --   notes  = { [id] = { id, author, ts, zone, text, deleted,
 --                       votes = { [voterFullName] = { v = 1 | -1 | 0, ts } } } },  -- 0 = vote removed, kept so it syncs
@@ -205,10 +206,15 @@ GG.seenGUIDs = {} -- GUID -> full name, this session only (for PARTY_KILL)
 function GG:Learn(e, unit)
   e.name  = self:UnitFullName(unit) or e.name
   local _, class = UnitClass(unit)
-  local race, lvl, guid = UnitRace(unit), UnitLevel(unit), UnitGUID(unit)
-  if self:Secret(class, race, lvl, guid) then return end
+  local race, raceFile = UnitRace(unit)
+  local lvl, guid = UnitLevel(unit), UnitGUID(unit)
+  local sex = UnitSex and UnitSex(unit)
+  if self:Secret(class, race, raceFile, lvl, guid, sex) then return end
   e.class = class or e.class
   e.race  = race or e.race
+  e.raceFile = raceFile or e.raceFile
+  -- 1 is "unknown", which has no race icon, so only male (2) and female (3) are kept.
+  if sex == 2 or sex == 3 then e.sex = sex end
   if lvl and lvl > 0 then e.level = lvl end
   if guid then self.seenGUIDs[guid] = e.name end
 end
