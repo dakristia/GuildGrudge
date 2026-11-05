@@ -1,11 +1,12 @@
 -- Guild Grudge: sharing data between guildies through hidden addon messages
 --
 -- Message formats (fields separated by ^, first field = type, second = protocol version):
---   N^1^key^name^^class^id^author^ts^deleted^zone^text      a note (new, edited or deleted)
+--   N^1^key^name^^class^id^author^ts^deleted^zone^text^tag  a note (new, edited or deleted); tag is optional
 --   B^1^key^name^^poster^ts^claimedBy^claimedTs^reward      a bounty (posted, claimed or removed)
 --   V^1^key^name^^noteId^voter^v^ts                         a vote on a note (v = 1, -1 or 0 for removed)
 --   S^1^key^name^^class^zone                                "I just spotted this player"
 --   P^1^key^name^^class^raceFile^race^sex^level^ts          a player's class, race, sex and level (newest ts wins)
+--   L^1^key^name^^list^ts                                   which list a player is on (list = watch or wanted; newest ts wins)
 --   H^1^since                                               "send me everything newer than <since>"
 --   D^1^requester                                           "I'm answering that request, others can relax"
 -- The empty fifth field used to be the realm. Receivers rebuild the key from name.
@@ -64,7 +65,13 @@ function GG:QueueLength() return #queue end
 
 function GG:SendNote(key, e, n, channel, target)
   local head = join("N", PROTO, key, e.name, "", e.class, n.id, n.author, n.ts, n.deleted and 1 or 0, n.zone, "")
-  self:Send(head .. self:Cut(n.deleted and "" or n.text, 250 - #head), channel, target)
+  local tag = n.deleted and "" or n.tag or ""
+  -- The tag is the last field. Clean() strips ^ from text, so old clients read the text and ignore the tag.
+  self:Send(head .. self:Cut(n.deleted and "" or n.text, 250 - #head - #tag - 1) .. SEP .. tag, channel, target)
+end
+
+function GG:SendList(key, e, channel, target)
+  self:Send(join("L", PROTO, key, e.name, "", e.list or "wanted", e.listTs), channel, target)
 end
 
 function GG:SendBounty(key, e, channel, target)
@@ -109,6 +116,8 @@ function GG:DumpTo(target, since)
     if e.bounty and e.bounty.ts > since then self:SendBounty(key, e, "WHISPER", target) end
     -- Profiles go after the notes, because the receiver ignores profiles of players it doesn't know.
     if (e.profileTs or 0) > since then self:SendProfile(key, e, "WHISPER", target) end
+    -- The list goes after the notes for the same reason.
+    if (e.listTs or 0) > since then self:SendList(key, e, "WHISPER", target) end
     -- Votes go after the notes, because the receiver ignores votes on notes it doesn't know.
     for _, n in pairs(e.notes) do
       for voter, vote in pairs(n.votes or {}) do
@@ -133,10 +142,10 @@ handlers.N = function(t, channel, sender)
   local e = entryFor(t[4], t[6])
   local ts = tonumber(t[9])
   if not e or not nz(t[7]) or not ts then return end
-  local n = { id = t[7], author = t[8], ts = ts, deleted = t[10] == "1" or nil, zone = t[11] or "", text = t[12] or "" }
+  local n = { id = t[7], author = t[8], ts = ts, deleted = t[10] == "1" or nil, zone = t[11] or "", text = t[12] or "", tag = nz(t[13]) }
   if GG:MergeNote(e, n) then
     if channel == "GUILD" and not n.deleted and GG:Now() - ts < 300 then
-      GG:Print(n.author, "added", GG:ColorName(e) .. ":", n.text)
+      GG:Print(n.author, "added", GG:ColorName(e) .. ":", (n.tag and ("|cffffcc00[" .. n.tag .. "]|r ") or "") .. n.text)
     end
     GG:Changed()
   end
@@ -184,6 +193,16 @@ handlers.P = function(t)
   if sex == 2 or sex == 3 then e.sex = sex end
   if level and level > 0 then e.level = level end
   e.profileTs = ts
+  GG:Changed()
+end
+
+handlers.L = function(t)
+  local e = GG:GetEntry(t[4], false)
+  local list, ts = t[6], tonumber(t[7])
+  if not e or not ts or ts <= (e.listTs or 0) then return end
+  if list ~= "watch" and list ~= "wanted" then return end
+  e.list = list == "watch" and "watch" or nil
+  e.listTs = ts
   GG:Changed()
 end
 

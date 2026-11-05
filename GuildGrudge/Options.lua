@@ -127,6 +127,10 @@ local function RegisterSettings()
   Checkbox("sound", "Alert sound", "Play a sound with the proximity alert.")
   Checkbox("shareSpotted", "Share sightings with the guild", "Tell guildmates when you spot someone on the list.")
   Checkbox("announceClaims", "Announce bounty claims in guild chat", "Post in guild chat when you claim a bounty.")
+  Checkbox("watchNearby", "Watch list: nearby chat line",
+    "Print a chat line when someone from your watch list is near you. There is no warning on screen.")
+  Checkbox("watchGroup", "Watch list: warn when they join your group",
+    "Show a warning when someone from your watch list joins your party or raid.")
   Checkbox("minimapButton", "Show minimap button", "Show the Guild Grudge button on the minimap.",
     function() GG:UpdateMinimapButton() end)
 

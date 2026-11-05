@@ -495,5 +495,159 @@ test("an older profile does not overwrite newer local data", function()
   noErrors(b)
 end)
 
+---------------------------------------------------------------------------
+-- Watch list and tags
+---------------------------------------------------------------------------
+local function chatHas(c, text) return table.concat(c.chat, "\n"):find(text, 1, true) ~= nil end
+
+test("a tagged note syncs with its tag", function()
+  local a, b = unpack(guild(2))
+  a.ns:AddNote("Gankmaster", "took all the loot", nil, { tag = "Ninja looter" })
+  W.advance(2)
+  eq(firstNote(b, "gankmaster").tag, "Ninja looter")
+  eq(firstNote(b, "gankmaster").text, "took all the loot")
+  eq(W.log.tooLong, 0, "oversized messages")
+  noErrors(a); noErrors(b)
+end)
+
+test("a tag alone is enough for a note", function()
+  local a, b = unpack(guild(2))
+  a.ns:AddNote("Gankmaster", "", nil, { tag = "Scammer" })
+  W.advance(2)
+  eq(firstNote(b, "gankmaster").tag, "Scammer")
+end)
+
+test("an old-format 12-field N message still parses and has no tag", function()
+  local a, b = unpack(guild(2))
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "N^1^gankmaster^Gankmaster^^WARRIOR^id1^Player1^" .. W.serverTime .. "^0^Barrens^rude", "GUILD")
+  local n = firstNote(b, "gankmaster")
+  eq(n.text, "rude")
+  eq(n.tag, nil)
+  noErrors(b)
+end)
+
+test("a new watch entry syncs its list live", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "watch Gankmaster took the loot")
+  W.advance(3)
+  assert(a.ns:IsWatch(a.ns.db.entries["gankmaster"]), "A watches")
+  assert(b.ns:IsWatch(b.ns.db.entries["gankmaster"]), "B watches")
+  eq(b.ns.db.entries["gankmaster"].listTs, a.ns.db.entries["gankmaster"].listTs)
+  noErrors(a); noErrors(b)
+end)
+
+test("the list reaches a guildie who logs in later", function()
+  local a = guild(2)[1]
+  W.slash(a, "watch Gankmaster took the loot")
+  W.advance(3)
+  local d = W.newClient({ name = "Newbie", realm = "Realm" })
+  W.login(d)
+  W.advance(40)
+  assert(d.ns:IsWatch(d.ns.db.entries["gankmaster"]), "newcomer has the watch entry")
+  noErrors(d)
+end)
+
+test("/gg move switches lists and syncs; an older L is ignored", function()
+  local a, b = unpack(guild(2))
+  W.slash(a, "watch Gankmaster took the loot")
+  W.advance(3)
+  W.serverTime = W.serverTime + 10
+  W.slash(a, "move Gankmaster")
+  W.advance(3)
+  assert(not b.ns:IsWatch(b.ns.db.entries["gankmaster"]), "B back on Wanted")
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE", "L^1^gankmaster^Gankmaster^^watch^" .. (W.serverTime - 100), "GUILD")
+  assert(not b.ns:IsWatch(b.ns.db.entries["gankmaster"]), "stale L ignored")
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE", "L^1^gankmaster^Gankmaster^^bogus^" .. (W.serverTime + 100), "GUILD")
+  assert(not b.ns:IsWatch(b.ns.db.entries["gankmaster"]), "unknown list ignored")
+  a.env.C_ChatInfo.SendAddonMessage("GGRUDGE", "L^1^unknown^Unknown^^watch^" .. W.serverTime, "GUILD")
+  eq(b.ns.db.entries["unknown"], nil, "L does not create entries")
+end)
+
+test("SetBounty is refused on a watch entry", function()
+  local a = guild(1)[1]
+  W.slash(a, "watch Gankmaster took the loot")
+  a.chat = {}
+  W.slash(a, "bounty Gankmaster 50g")
+  eq(a.ns:ActiveBounty(a.ns.db.entries["gankmaster"]), nil, "no bounty")
+  assert(chatHas(a, "Bounties are only for the Wanted list."), "message: " .. table.concat(a.chat, " / "))
+end)
+
+test("moving to the watch list is refused with an open bounty", function()
+  local a = guild(1)[1]
+  W.slash(a, "bounty Gankmaster 50g")
+  a.chat = {}
+  W.slash(a, "move Gankmaster")
+  assert(not a.ns:IsWatch(a.ns.db.entries["gankmaster"]), "still wanted")
+  assert(chatHas(a, "first. Bounties are only for the Wanted list."), "message: " .. table.concat(a.chat, " / "))
+end)
+
+test("a watch entry near you gives no raid warning, and a chat line only with watchNearby", function()
+  local a = guild(1)[1]
+  W.slash(a, "watch Gankmaster took the loot")
+  a.chat = {}
+  sight(a, { name = "Gankmaster" })
+  eq(#a.chat, 0, "silent by default")
+  a.ns.db.settings.watchNearby = true
+  W.advance(100)
+  sight(a, { name = "Gankmaster" })
+  assert(chatHas(a, "from your watch list is nearby"), "chat line: " .. table.concat(a.chat, " / "))
+  assert(not chatHas(a, "RW: "), "no raid warning")
+  assert(not chatHas(a, "is nearby!"), "no alert")
+  eq(W.log.types.S, nil, "nothing shared with the guild")
+  noErrors(a)
+end)
+
+test("a watch player joining the group warns once, and again after rejoining", function()
+  local a = guild(1)[1]
+  W.slash(a, "watch Gankmaster took the loot")
+  a.chat = {}
+  a.units = { party1 = { name = "Gankmaster", class = "WARRIOR" } }
+  W.fire(a, "GROUP_ROSTER_UPDATE")
+  assert(chatHas(a, "RW: |cffffcc00Watch list:|r"), "raid warning: " .. table.concat(a.chat, " / "))
+  assert(chatHas(a, "joined your group"), "joined")
+  a.chat = {}
+  W.fire(a, "GROUP_ROSTER_UPDATE")
+  eq(#a.chat, 0, "no second warning")
+  a.units = {}
+  W.fire(a, "GROUP_ROSTER_UPDATE")
+  a.units = { party1 = { name = "Gankmaster", class = "WARRIOR" } }
+  W.fire(a, "GROUP_ROSTER_UPDATE")
+  assert(chatHas(a, "joined your group"), "warns again after rejoining")
+  noErrors(a)
+end)
+
+test("a wanted player joining the group gives no watch warning; raids are scanned too", function()
+  local a = guild(1)[1]
+  W.slash(a, "add Gankmaster rude")
+  W.slash(a, "watch Thief took the loot")
+  a.chat = {}
+  a.inRaid, a.groupSize = true, 2
+  a.units = { raid1 = { name = "Gankmaster" }, raid2 = { name = "Thief" } }
+  W.fire(a, "GROUP_ROSTER_UPDATE")
+  local out = table.concat(a.chat, "\n")
+  assert(out:find("Thief", 1, true) and out:find("joined your group", 1, true), "Thief warned: " .. out)
+  assert(not out:find("Gankmaster", 1, true), "Gankmaster not warned")
+  noErrors(a)
+end)
+
+test("KnownTags lists the suggestions first, then custom tags from notes", function()
+  local a, b = unpack(guild(2))
+  eq(#b.ns:KnownTags(), #b.ns.TAGS, "only suggestions")
+  a.ns:AddNote("Gankmaster", "spams", nil, { tag = "Annoying" })
+  W.advance(2)
+  local tags = b.ns:KnownTags()
+  eq(tags[1], "Ninja looter", "suggestions first")
+  eq(tags[#tags], "Annoying", "custom tag last")
+  eq(b.ns:EntryTags(b.ns.db.entries["gankmaster"])[1], "Annoying")
+end)
+
+test("MaxTs counts listTs", function()
+  local a = guild(1)[1]
+  local e = a.ns:GetEntry("Gankmaster", true)
+  e.listTs = W.serverTime + 5000
+  eq(a.ns:MaxTs(), W.serverTime + 5000)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

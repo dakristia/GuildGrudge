@@ -17,6 +17,8 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 | `/gg add <first> <surname> <note>` | Add a note by name |
 | `/gg show <name>` | Print everything on a player |
 | `/gg del <name>` | Remove your own notes on a player |
+| `/gg watch <first> <surname> <note>` | Add a note on the watch list |
+| `/gg move <name>` | Move a player between the Wanted list and the watch list |
 | `/gg bounty <first> <surname> <reward>` | Post a bounty (e.g. `50g and eternal glory`) |
 | `/gg unbounty <name>` | Remove a bounty |
 | `/gg claim <name>` | Claim a bounty manually |
@@ -38,6 +40,7 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 - **Sync:** hidden addon messages on the guild channel. New notes and bounties go out live. On login the addon asks the guild for anything newer than what it has, and one online guildie answers by whisper. Blizzard allows about 1 addon message per second, so a big sync takes a while (100 notes ≈ 2 minutes). Nothing is sent inside dungeons, raids or battlegrounds, where addon messages are blocked; the queue waits.
 - **Detection:** nameplates, target and mouseover. Forever blocks addons from the combat log, so a ganker you never see a nameplate for is not detected. Turn enemy nameplates on (`V`). Alerts have a 60-second cooldown per player.
 - **Bounties:** getting the killing blow on a player with an open bounty (the `PARTY_KILL` event) claims it and posts in guild chat.
+- **Watch list:** for friendly players you want to keep an eye on (ninja looters, scammers). Pick the list when you add a player, and give a note a tag such as "Ninja looter". Watch-list players only warn you when they join your group (and optionally with a chat line when nearby), and they cannot have bounties.
 - **Tooltip:** listed players get a "Grudge: N notes / Bounty" line.
 
 ## Check these first in game

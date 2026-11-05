@@ -123,6 +123,9 @@ function M.newClient(opts)
       local u = c.units and c.units[unit]
       if u then return u.name, u.second end
     end,
+    -- Group members are plain units ("party1", "raid2"); tests set c.units, c.inRaid and c.groupSize.
+    IsInRaid = function() return c.inRaid == true end,
+    GetNumGroupMembers = function() return c.groupSize or 0 end,
     UnitIsPlayer = function(unit) return unit == "player" or (c.units and c.units[unit] ~= nil) end,
     UnitExists = function(unit) return unit == "player" or (c.units and c.units[unit] ~= nil) end,
     UnitClass = function(unit)

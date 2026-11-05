@@ -5,6 +5,8 @@ _G.GuildGrudge = GG
 GG.VERSION  = "0.4.1"
 GG.PREFIX   = "GGRUDGE"   -- addon message prefix (max 16 chars)
 GG.MAX_NOTE = 120         -- max note length in bytes (addon messages cap at 255)
+GG.MAX_TAG  = 24          -- max tag length in bytes
+GG.TAGS = { "Ninja looter", "Scammer", "Toxic", "Griefer", "Leaver" } -- suggested tags; players can type their own
 
 local DEFAULTS = {
   alerts         = true,  -- raid-warning style alert when a listed player is near
@@ -14,6 +16,8 @@ local DEFAULTS = {
   alertCooldown  = 60,    -- seconds a player must be out of sight before they can alert you again
   minimapButton  = true,  -- show the minimap button
   minimapAngle   = 200,   -- where the minimap button sits, in degrees around the minimap
+  watchNearby    = false, -- a chat line (no raid warning) when a watch-list player is near
+  watchGroup     = true,  -- a raid warning when a watch-list player joins your group
 }
 
 ---------------------------------------------------------------------------
@@ -154,8 +158,10 @@ end
 --   name, class, race, level,           -- name = "First Surname" (or "Name-Realm")
 --   raceFile, sex,                      -- raceFile = 2nd return of UnitRace ("Scourge"); sex = 2 male | 3 female
 --   profileTs,                          -- when class, race, raceFile, sex or level last changed; newer wins when syncing
+--   list, listTs,                       -- list = "watch", or nil for the Wanted list; listTs = when list last changed, newer wins when syncing
 --   lastSeen, lastSeenZone, lastSeenBy,
 --   notes  = { [id] = { id, author, ts, zone, text, deleted,
+--                       tag,            -- optional short reason, e.g. "Ninja looter"
 --                       votes = { [voterFullName] = { v = 1 | -1 | 0, ts } } } },  -- 0 = vote removed, kept so it syncs
 --   bounty = { poster, reward, ts, claimedBy, claimedTs }   -- ts = last change
 -- }
@@ -265,6 +271,43 @@ function GG:IsListed(e)
   return false
 end
 
+function GG:IsWatch(e)
+  return e.list == "watch"
+end
+
+-- The unique tags on an entry's live notes, best note first.
+function GG:EntryTags(e)
+  local tags, seen = {}, {}
+  for _, n in ipairs(self:SortedNotes(e)) do
+    if n.tag and not seen[n.tag] then
+      seen[n.tag] = true
+      tags[#tags + 1] = n.tag
+    end
+  end
+  return tags
+end
+
+-- Our suggestions first, then every other tag in use, so a custom tag reaches everyone.
+function GG:KnownTags()
+  local tags, seen = {}, {}
+  for _, tag in ipairs(self.TAGS) do
+    seen[tag] = true
+    tags[#tags + 1] = tag
+  end
+  local extra = {}
+  for _, e in pairs(self.db.entries) do
+    for _, n in pairs(e.notes) do
+      if n.tag and not n.deleted and not seen[n.tag] then
+        seen[n.tag] = true
+        extra[#extra + 1] = n.tag
+      end
+    end
+  end
+  table.sort(extra)
+  for _, tag in ipairs(extra) do tags[#tags + 1] = tag end
+  return tags
+end
+
 function GG:MergeNote(e, n)
   local old = e.notes[n.id]
   if old and old.ts >= n.ts then return false end
@@ -292,6 +335,7 @@ function GG:MaxTs()
     end
     if e.bounty and e.bounty.ts > max then max = e.bounty.ts end
     if (e.profileTs or 0) > max then max = e.profileTs end
+    if (e.listTs or 0) > max then max = e.listTs end
   end
   return max
 end
@@ -303,20 +347,28 @@ end
 ---------------------------------------------------------------------------
 -- Actions
 ---------------------------------------------------------------------------
-function GG:AddNote(name, text, unit)
+-- opts (optional): { tag = "Ninja looter", list = "watch" }. The list only applies to a player who is not listed yet.
+function GG:AddNote(name, text, unit, opts)
+  opts = opts or {}
   text = self:Cut(self:Clean(text), self.MAX_NOTE)
-  if text == "" then return self:Print("Write a note, e.g. camped me at the Crossroads FP") end
+  local tag = self:Cut(self:Clean(opts.tag), self.MAX_TAG)
+  if text == "" and tag == "" then return self:Print("Write a note, e.g. camped me at the Crossroads FP") end
   local e, key = self:GetEntry(name, true)
   if not e then return self:Print("Usage: /gg add <name> <note>") end
   if unit then self:Learn(e, unit) end
+  local fresh = not self:IsListed(e)
   local me = self:Me()
   local n = {
     id = me .. "-" .. self:Now() .. "-" .. math.random(1000, 9999),
-    author = me, ts = self:Now(), zone = self:Zone(), text = text,
+    author = me, ts = self:Now(), zone = self:Zone(), text = text, tag = tag ~= "" and tag or nil,
   }
   e.notes[n.id] = n
+  local watch = opts.list == "watch" and fresh
+  if watch then e.list, e.listTs = "watch", self:Now() end
   self:SendNote(key, e, n, "GUILD")
-  self:Print("Added", self:ColorName(e) .. ":", text)
+  if watch then self:SendList(key, e, "GUILD") end
+  self:Print(self:IsWatch(e) and "Added to watch list" or "Added", self:ColorName(e) .. ":",
+    (tag ~= "" and ("|cffffcc00[" .. tag .. "]|r ") or "") .. text)
   self:Changed()
 end
 
@@ -349,10 +401,24 @@ function GG:DeleteMyNotes(input)
   self:Changed()
 end
 
+-- list: "watch" or "wanted"
+function GG:SetList(input, list)
+  local e, key, ambiguous = self:Find(input)
+  if not e then return self:NotFound(input, ambiguous) end
+  if list == "watch" and self:ActiveBounty(e) then
+    return self:Print("Remove the bounty on", self:ColorName(e), "first. Bounties are only for the Wanted list.")
+  end
+  e.list, e.listTs = list == "watch" and "watch" or nil, self:Now()
+  self:SendList(key, e, "GUILD")
+  self:Print(self:ColorName(e), list == "watch" and "moved to the watch list" or "moved to the Wanted list")
+  self:Changed()
+end
+
 function GG:SetBounty(input, reward)
   reward = self:Cut(self:Clean(reward), 100)
   if reward == "" then return self:Print("Usage: /gg bounty <name> <reward>") end
   local e, key = self:Find(input)
+  if e and self:IsWatch(e) then return self:Print("Bounties are only for the Wanted list.") end
   if not e then e, key = self:GetEntry(input, true) end
   if not e then return self:Print("Usage: /gg bounty <name> <reward>") end
   e.bounty = { poster = self:Me(), reward = reward, ts = self:Now(), claimedBy = "", claimedTs = 0 }
@@ -407,7 +473,7 @@ function GG:Top()
   local wanted, hunters = {}, {}
   for _, e in pairs(self.db.entries) do
     local c = #self:SortedNotes(e)
-    if c > 0 then wanted[#wanted + 1] = { e = e, c = c } end
+    if c > 0 and not self:IsWatch(e) then wanted[#wanted + 1] = { e = e, c = c } end
     if e.bounty and (e.bounty.claimedBy or "") ~= "" then
       hunters[e.bounty.claimedBy] = (hunters[e.bounty.claimedBy] or 0) + 1
     end
@@ -450,6 +516,8 @@ local HELP = {
   "/gg - open the list",
   "/gg t <note> - add a note on your current target",
   "/gg add <name> <note> - add a note by name",
+  "/gg watch <name> <note> - add a note on the watch list (no bounties, warns when they join your group)",
+  "/gg move <name> - move a player between the Wanted and watch lists",
   "/gg show <name> - print everything on a player",
   "/gg del <name> - remove your own notes on a player",
   "/gg bounty <name> <reward> - post a (fictive) bounty",
@@ -485,6 +553,15 @@ SlashCmdList.GUILDGRUDGE = function(msg)
     if not name then return GG:Print("Usage: /gg add <name> <note>") end
     GG:HintNewName(name)
     GG:AddNote(name, note)
+  elseif cmd == "watch" then
+    local name, note = GG:TakeName(rest)
+    if not name then return GG:Print("Usage: /gg watch <name> <note>") end
+    GG:HintNewName(name)
+    GG:AddNote(name, note, nil, { list = "watch" })
+  elseif cmd == "move" then
+    local e, _, ambiguous = GG:Find(rest)
+    if not e then return GG:NotFound(rest, ambiguous) end
+    GG:SetList(e.name, GG:IsWatch(e) and "wanted" or "watch")
   elseif cmd == "show" then
     GG:Show(rest)
   elseif cmd == "del" or cmd == "remove" then
