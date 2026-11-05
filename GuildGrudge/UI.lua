@@ -55,7 +55,7 @@ function GG:PromptAddPlayer()
   self:Prompt("Name and note, e.g. Ana Forever camped me at the FP:", function(text)
     local name, note = GG:TakeName(text)
     if not name then
-      GG:Print("Usage: Name [Realm] note text, e.g. Ana Forever camped me at the FP")
+      GG:Print("Write the full name, then the note, e.g. Ana Forever camped me at the FP")
       return
     end
     GG:HintNewName(name)
@@ -149,7 +149,7 @@ local function Build()
     if full then GG:PromptNote(full, "target") else GG:Print("Target a player first.") end
   end)
   AddToolbarButton(f, "Add player", "Add a note on a player by name", 116, function() GG:PromptAddPlayer() end)
-  AddToolbarButton(f, "Macro", "Create a macro that notes your target", 212, function()
+  AddToolbarButton(f, "Macro", "Put a macro that opens this window on your cursor", 212, function()
     if GG.MakeMacro then GG:MakeMacro() end
   end)
   AddToolbarButton(f, "Settings", "Open the Guild Grudge settings", 308, function()
