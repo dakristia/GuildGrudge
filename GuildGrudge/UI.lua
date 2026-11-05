@@ -2,9 +2,15 @@
 local ADDON, GG = ...
 local frame
 
+-- The watch list is for friendly players, so it gets a yellow caution look instead of the red skull.
+local CAUTION = "Interface\\DialogFrame\\UI-Dialog-Icon-AlertNew"
+local WATCH_R, WATCH_G, WATCH_B = 1, 0.8, 0
+local WATCH_HEX = "ffffcc00"
+
 -- Text input popup. The callback lives in the popup data so one dialog serves every caller.
-if StaticPopupDialogs then
-  StaticPopupDialogs["GUILDGRUDGE_INPUT"] = {
+-- The optional variant also calls it with an empty text, for a note that has a tag.
+local function InputDialog(allowEmpty)
+  return {
     text = "%s",
     button1 = ACCEPT,
     button2 = CANCEL,
@@ -12,13 +18,13 @@ if StaticPopupDialogs then
     maxLetters = 200,
     OnAccept = function(dialog, data)
       local text = strtrim(dialog:GetEditBox():GetText() or "")
-      if text ~= "" and data then data(text) end
+      if (text ~= "" or allowEmpty) and data then data(text) end
     end,
     EditBoxOnEnterPressed = function(editBox, data)
       local dialog = editBox:GetParent()
       local text = strtrim(editBox:GetText() or "")
       dialog:Hide()
-      if text ~= "" and data then data(text) end
+      if (text ~= "" or allowEmpty) and data then data(text) end
     end,
     EditBoxOnEscapePressed = function(editBox) editBox:GetParent():Hide() end,
     OnShow = function(dialog) dialog:GetEditBox():SetFocus() end,
@@ -26,6 +32,11 @@ if StaticPopupDialogs then
     whileDead = 1,
     hideOnEscape = 1,
   }
+end
+
+if StaticPopupDialogs then
+  StaticPopupDialogs["GUILDGRUDGE_INPUT"] = InputDialog(false)
+  StaticPopupDialogs["GUILDGRUDGE_INPUT_OPTIONAL"] = InputDialog(true)
   StaticPopupDialogs["GUILDGRUDGE_CONFIRM"] = {
     text = "%s",
     button1 = YES,
@@ -37,10 +48,42 @@ if StaticPopupDialogs then
   }
 end
 
-function GG:Prompt(title, onAccept, initialText)
+function GG:Prompt(title, onAccept, initialText, allowEmpty)
   if not StaticPopup_Show then return end
-  local dialog = StaticPopup_Show("GUILDGRUDGE_INPUT", title, nil, onAccept)
+  local which = allowEmpty and "GUILDGRUDGE_INPUT_OPTIONAL" or "GUILDGRUDGE_INPUT"
+  local dialog = StaticPopup_Show(which, title, nil, onAccept)
   if dialog and initialText then dialog:GetEditBox():SetText(initialText) end
+end
+
+-- Adds the tag choices to a menu or submenu: every known tag, a custom one, or none (nil).
+local function AddTagButtons(desc, onPick)
+  for _, tag in ipairs(GG:KnownTags()) do
+    desc:CreateButton(tag, function() onPick(tag) end)
+  end
+  desc:CreateButton("Custom tag...", function()
+    GG:Prompt(("Your tag (max %d letters):"):format(GG.MAX_TAG), onPick)
+  end)
+  desc:CreateButton("No tag", function() onPick(nil) end)
+end
+
+-- A tag picked, so ask for the note. It may be empty when there is a tag.
+local function AskWatchNote(name, unit, tag)
+  local title = tag and "Note on %s (optional):" or "Note on %s:"
+  GG:Prompt(title:format(name), function(text)
+    GG:AddNote(name, text, unit, { tag = tag, list = "watch" })
+  end, nil, tag ~= nil)
+end
+
+local function PickTag(title, owner, onPick)
+  if not MenuUtil or not MenuUtil.CreateContextMenu then return end
+  MenuUtil.CreateContextMenu(owner or UIParent, function(_, root)
+    root:CreateTitle(title)
+    AddTagButtons(root, onPick)
+  end)
+end
+
+function GG:PromptWatchNote(name, unit, owner)
+  PickTag("Tag for " .. name, owner, function(tag) AskWatchNote(name, unit, tag) end)
 end
 
 function GG:PromptNote(name, unit)
@@ -51,16 +94,20 @@ function GG:PromptBounty(name)
   self:Prompt("Bounty reward on " .. name .. " (e.g. 50g):", function(text) GG:SetBounty(name, text) end)
 end
 
-function GG:PromptAddPlayer()
-  self:Prompt("Name and note, e.g. Ana Forever camped me at the FP:", function(text)
-    local name, note = GG:TakeName(text)
-    if not name then
-      GG:Print("Write the full name, then the note, e.g. Ana Forever camped me at the FP")
-      return
-    end
-    GG:HintNewName(name)
-    GG:AddNote(name, note)
-  end)
+-- list "watch" asks for a tag first, so the name prompt may then leave the note empty.
+function GG:PromptAddPlayer(list, owner)
+  local function Ask(tag)
+    self:Prompt("Name and note, e.g. Ana Forever camped me at the FP:", function(text)
+      local name, note = GG:TakeName(text)
+      if not name then
+        GG:Print("Write the full name, then the note, e.g. Ana Forever camped me at the FP")
+        return
+      end
+      GG:HintNewName(name)
+      GG:AddNote(name, note, nil, list == "watch" and { tag = tag, list = "watch" } or nil)
+    end, nil, tag ~= nil)
+  end
+  if list == "watch" then PickTag("Tag for the watch list", owner, Ask) else Ask() end
 end
 
 local function HasMyNote(e)
@@ -76,12 +123,18 @@ local function ShowRowMenu(row)
   MenuUtil.CreateContextMenu(row, function(_, root)
     root:CreateTitle(e.name)
     root:CreateButton("Show all notes", function() GG:Show(e.name) end)
-    root:CreateButton("Add note...", function() GG:PromptNote(e.name) end)
-    if GG:ActiveBounty(e) then
-      root:CreateButton("Remove bounty", function() GG:ClearBounty(e.name) end)
-      root:CreateButton("Claim bounty", function() GG:TryClaim(e.name, true) end)
+    if GG:IsWatch(e) then
+      root:CreateButton("Add note...", function() GG:PromptWatchNote(e.name) end)
+      root:CreateButton("Move to Wanted list", function() GG:SetList(e.name, "wanted") end)
     else
-      root:CreateButton("Post bounty...", function() GG:PromptBounty(e.name) end)
+      root:CreateButton("Add note...", function() GG:PromptNote(e.name) end)
+      if GG:ActiveBounty(e) then
+        root:CreateButton("Remove bounty", function() GG:ClearBounty(e.name) end)
+        root:CreateButton("Claim bounty", function() GG:TryClaim(e.name, true) end)
+      else
+        root:CreateButton("Post bounty...", function() GG:PromptBounty(e.name) end)
+      end
+      root:CreateButton("Move to watch list", function() GG:SetList(e.name, "watch") end)
     end
     if HasMyNote(e) then
       root:CreateButton("Delete my notes", function()
@@ -107,11 +160,13 @@ end
 local ICON = "Interface\\Icons\\"
 local RAID_ICONS = "Interface\\TargetingFrame\\UI-RaidTargetingIcons"
 local CLASS_CIRCLES = "Interface\\TargetingFrame\\UI-Classes-Circles"
-local TABS = { "Wanted", "Bounties", "Hunters" }
+local TAB_WANTED, TAB_BOUNTIES, TAB_HUNTERS, TAB_WATCH = 1, 2, 3, 4
+local TABS = { "Wanted", "Bounties", "Hunters", "Watch" }
 local EMPTY_TEXT = {
-  "Nobody on the list yet. Target a ganker and click the crosshair button.",
-  "No open bounties.",
-  "No bounties claimed yet.",
+  [TAB_WANTED] = "Nobody on the list yet. Target a ganker and click the crosshair button.",
+  [TAB_BOUNTIES] = "No open bounties.",
+  [TAB_HUNTERS] = "No bounties claimed yet.",
+  [TAB_WATCH] = "Nobody on the watch list. Right-click a player's portrait and pick Add to watch list.",
 }
 
 local function ClassRGB(e)
@@ -269,7 +324,7 @@ local function WantedList(bountiesOnly)
   for key, e in pairs(GG.db.entries) do
     local notes = GG:SortedNotes(e)
     local bounty = GG:ActiveBounty(e)
-    if (#notes > 0 or bounty) and (bounty or not bountiesOnly) then
+    if not GG:IsWatch(e) and (#notes > 0 or bounty) and (bounty or not bountiesOnly) then
       list[#list + 1] = { kind = "player", key = key, e = e, notes = notes, bounty = bounty }
     end
   end
@@ -277,6 +332,21 @@ local function WantedList(bountiesOnly)
     local ab = a.bounty and 1 or 0
     local bb = b.bounty and 1 or 0
     if ab ~= bb then return ab > bb end
+    if #a.notes ~= #b.notes then return #a.notes > #b.notes end
+    return (a.e.lastSeen or 0) > (b.e.lastSeen or 0)
+  end)
+  return list
+end
+
+local function WatchList()
+  local list = {}
+  for key, e in pairs(GG.db.entries) do
+    local notes = GG:SortedNotes(e)
+    if GG:IsWatch(e) and #notes > 0 then
+      list[#list + 1] = { kind = "player", key = key, e = e, notes = notes, tags = GG:EntryTags(e) }
+    end
+  end
+  table.sort(list, function(a, b)
     if #a.notes ~= #b.notes then return #a.notes > #b.notes end
     return (a.e.lastSeen or 0) > (b.e.lastSeen or 0)
   end)
@@ -315,6 +385,7 @@ local function Matches(el, filter)
   if el.key:find(filter, 1, true) then return true end
   for _, n in ipairs(el.notes) do
     if strlower(n.text):find(filter, 1, true) then return true end
+    if n.tag and strlower(n.tag):find(filter, 1, true) then return true end
   end
   return false
 end
@@ -360,6 +431,16 @@ local function CreateRowRegions(row)
   row.skull:SetSize(14, 14)
   row.skull:SetPoint("RIGHT", row.reward, "LEFT", -2, 0)
   SetSkull(row.skull)
+  -- Watch rows swap the skull for a caution triangle and get a yellow stripe on the left edge.
+  row.caution = row:CreateTexture(nil, "ARTWORK")
+  row.caution:SetSize(14, 14)
+  row.caution:SetPoint("RIGHT", row.reward, "LEFT", -2, 0)
+  row.caution:SetTexture(CAUTION)
+  row.stripe = row:CreateTexture(nil, "ARTWORK")
+  row.stripe:SetWidth(3)
+  row.stripe:SetPoint("TOPLEFT")
+  row.stripe:SetPoint("BOTTOMLEFT")
+  row.stripe:SetColorTexture(WATCH_R, WATCH_G, WATCH_B, 1)
 
   row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
   row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -396,9 +477,19 @@ local function SetRowPlayer(row, data)
   row.name:SetText(e.name)
   row.name:SetTextColor(ClassRGB(e))
   row.info:SetText(InfoText(e))
-  row.note:SetText(data.notes[1] and data.notes[1].text or "")
+  local top = data.notes[1]
+  -- A tag-only note has no text, so its tag takes the line.
+  row.note:SetText(top and (top.text ~= "" and top.text or top.tag) or "")
   row.count:SetText(Plural(#data.notes, "note"))
-  if data.bounty then
+  if data.tags then
+    row.bg:SetColorTexture(WATCH_R, WATCH_G, WATCH_B, 0.07)
+    row.stripe:Show()
+    row.caution:Show()
+    row.skull:Hide()
+    row.reward:SetTextColor(WATCH_R, WATCH_G, WATCH_B)
+    row.reward:SetText(table.concat(data.tags, ", "))
+    row.note:SetWidth(#data.tags > 0 and 140 or 250)
+  elseif data.bounty then
     row.note:SetWidth(170)
     row.skull:Show()
     row.reward:SetText(data.bounty.reward)
@@ -415,7 +506,12 @@ local function InitRow(row, data)
     CreateRowRegions(row)
   end
   row.key, row.entry = data.key, data.e
+  -- Rows are recycled, so a wanted row first undoes everything a watch row changed.
+  row.bg:SetColorTexture(1, 1, 1, 0.04)
   row.bg:SetShown(data.index % 2 == 0)
+  row.stripe:Hide()
+  row.caution:Hide()
+  row.reward:SetTextColor(1, 0.82, 0)
   if data.kind == "hunter" then SetRowHunter(row, data) else SetRowPlayer(row, data) end
   if frame.selected == data.key then row:LockHighlight() else row:UnlockHighlight() end
 end
@@ -469,7 +565,12 @@ local function PlayerBlocks(d, e, notes)
     local parts = { ColoredName(n.author), GG:Age(n.ts) }
     if n.zone and n.zone ~= "" then parts[#parts + 1] = n.zone end
     local score = NoteScore(n)
-    blocks[#blocks + 1] = NoteBlock(d, n.text, table.concat(parts, " - "), {
+    local text = n.text
+    if n.tag then
+      local tag = ("|c%s[%s]|r"):format(WATCH_HEX, n.tag)
+      text = text ~= "" and (tag .. " " .. text) or tag
+    end
+    blocks[#blocks + 1] = NoteBlock(d, text, table.concat(parts, " - "), {
       voting = voting,
       entryName = e.name,
       note = n,
@@ -505,7 +606,7 @@ end
 -- Each visible section hangs below the one above it, so a hidden section leaves no gap.
 local function Relayout(d, hasButtons)
   local prev = d.header
-  for _, section in ipairs({ d.bountySec, d.seenSec, d.notesSec }) do
+  for _, section in ipairs({ d.bountySec, d.watchSec, d.seenSec, d.notesSec }) do
     if section:IsShown() then
       section:ClearAllPoints()
       section:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -6)
@@ -536,8 +637,17 @@ local function UpdateDetailPlayer(d, el)
   d.info:SetText(strtrim(("%s %s %s"):format(
     e.level and ("lvl " .. e.level) or "", e.race or "", e.class and strlower(e.class) or "")))
 
+  local watch = GG:IsWatch(e)
+  d.watchSec:SetShown(watch)
+  if watch then
+    local tags = GG:EntryTags(e)
+    d.watchTags:SetText(#tags > 0 and table.concat(tags, ", ") or "No tags")
+    if #tags > 0 then d.watchTags:SetTextColor(WATCH_R, WATCH_G, WATCH_B) else d.watchTags:SetTextColor(0.5, 0.5, 0.5) end
+  end
+
   local claimed = e.bounty and (e.bounty.claimedBy or "") ~= "" and e.bounty
-  d.bountySec:SetShown((b or claimed) and true or false)
+  -- The watch section takes the bounty section's place.
+  d.bountySec:SetShown(not watch and (b or claimed) and true or false)
   if b then
     d.reward:SetText(b.reward)
     d.bountyMeta:SetText("Posted by " .. ColoredName(b.poster))
@@ -553,9 +663,10 @@ local function UpdateDetailPlayer(d, el)
   end
 
   SetNotes(d, ("Notes (%d)"):format(#el.notes), PlayerBlocks(d, e, el.notes))
-  d.bountyButton:SetText(b and "Remove bounty" or "Post bounty")
+  d.bountyButton:SetText(watch and "Move to Wanted" or b and "Remove bounty" or "Post bounty")
   if b then d.claimButton:Enable() else d.claimButton:Disable() end
   SetShown(d.playerOnly, true)
+  d.claimButton:SetShown(not watch)
 end
 
 local function UpdateDetailHunter(d, el)
@@ -567,6 +678,7 @@ local function UpdateDetailHunter(d, el)
   SetHunterColor(d.name, el.name)
   d.info:SetText(el.count == 1 and "1 bounty claimed" or (el.count .. " bounties claimed"))
   d.bountySec:Hide()
+  d.watchSec:Hide()
   d.seenSec:Hide()
   SetNotes(d, ("Claimed bounties (%d)"):format(el.count), ClaimBlocks(d, el.claims))
   SetShown(d.playerOnly, false)
@@ -578,6 +690,7 @@ local function UpdateDetail(d, el)
     SetShown(d.always, false)
     SetShown(d.playerOnly, false)
     d.bountySec:Hide()
+    d.watchSec:Hide()
     d.seenSec:Hide()
     d.hint:Show()
     return
@@ -617,13 +730,16 @@ local function BuildToolbar(f)
   b = AddIconButton(f, b, "Put a /gg macro on your cursor", ICON .. "INV_Misc_Book_09", nil, function()
     if GG.MakeMacro then GG:MakeMacro() end
   end)
-  b = AddIconButton(f, b, "Add a player by name", nil, "communities-icon-addchannelplus", function()
-    GG:PromptAddPlayer()
-  end)
-  AddIconButton(f, b, "Note your target", ICON .. "Ability_Hunter_SniperShot", nil, function()
-    local full = UnitIsPlayer("target") and GG:UnitFullName("target")
-    if full then GG:PromptNote(full, "target") else GG:Print("Target a player first.") end
-  end)
+  b = AddIconButton(f, b, "Add a player by name (on the Watch tab: add to the watch list)", nil,
+    "communities-icon-addchannelplus", function(self)
+      GG:PromptAddPlayer(f.tab == TAB_WATCH and "watch" or nil, self)
+    end)
+  AddIconButton(f, b, "Note your target (on the Watch tab: add to the watch list)",
+    ICON .. "Ability_Hunter_SniperShot", nil, function(self)
+      local full = UnitIsPlayer("target") and GG:UnitFullName("target")
+      if not full then return GG:Print("Target a player first.") end
+      if f.tab == TAB_WATCH then GG:PromptWatchNote(full, "target", self) else GG:PromptNote(full, "target") end
+    end)
 end
 
 local function BuildList(f)
@@ -714,6 +830,21 @@ local function CreateBountySection(d)
   d.reward:SetJustifyH("LEFT")
   d.reward:SetWordWrap(false)
   d.bountyMeta = Label(s, "GameFontDisableSmall", PAD, -34, CONTENT_W)
+end
+
+local function CreateWatchSection(d)
+  local s = CreateSection(d, 62)
+  d.watchSec = s
+  d.watchIcon = s:CreateTexture(nil, "ARTWORK")
+  d.watchIcon:SetSize(14, 14)
+  d.watchIcon:SetPoint("TOPLEFT", PAD, -1)
+  d.watchIcon:SetTexture(CAUTION)
+  local heading = s:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  heading:SetPoint("LEFT", d.watchIcon, "RIGHT", 4, 0)
+  heading:SetTextColor(WATCH_R, WATCH_G, WATCH_B)
+  heading:SetText("Watch list")
+  d.watchTags = Label(s, "GameFontHighlight", PAD, -20, CONTENT_W)
+  Label(s, "GameFontDisableSmall", PAD, -46, CONTENT_W):SetText("Warns you when they join your group.")
 end
 
 local function CreateSeenSection(d)
@@ -859,6 +990,7 @@ end
 local function CreateDetailWidgets(d)
   CreateHeader(d)
   CreateBountySection(d)
+  CreateWatchSection(d)
   CreateSeenSection(d)
   CreateNotesSection(d)
 
@@ -889,12 +1021,16 @@ local function BuildDetail(f)
 
   -- 80 + 112 + 80 plus two 6px gaps is 284, so the row starts 6px in from the left edge.
   d.addButton = AddDetailButton(d, 6, 80, "Add note", function()
-    if d.entry then GG:PromptNote(d.entry.name) end
+    local e = d.entry
+    if not e then return end
+    if GG:IsWatch(e) then GG:PromptWatchNote(e.name, nil, d.addButton) else GG:PromptNote(e.name) end
   end)
   d.bountyButton = AddDetailButton(d, 92, 112, "Post bounty", function()
     local e = d.entry
     if not e then return end
-    if GG:ActiveBounty(e) then GG:ClearBounty(e.name) else GG:PromptBounty(e.name) end
+    if GG:IsWatch(e) then
+      GG:SetList(e.name, "wanted")
+    elseif GG:ActiveBounty(e) then GG:ClearBounty(e.name) else GG:PromptBounty(e.name) end
   end)
   d.claimButton = AddDetailButton(d, 210, 80, "Claim", function()
     if d.entry then GG:TryClaim(d.entry.name, true) end
@@ -982,7 +1118,10 @@ end
 function GG:RefreshUI()
   if not frame or not frame:IsShown() then return end
   local tab = frame.tab
-  local all = tab == 3 and HunterList() or WantedList(tab == 2)
+  local all
+  if tab == TAB_HUNTERS then all = HunterList()
+  elseif tab == TAB_WATCH then all = WatchList()
+  else all = WantedList(tab == TAB_BOUNTIES) end
 
   -- The selection survives a search that hides it, but not a deleted or claimed entry.
   local selected
@@ -1031,6 +1170,9 @@ local function AddUnitMenuItems(_, root, ctx)
   root:CreateTitle("Guild Grudge")
   root:CreateButton("Add grudge note...", function() GG:PromptNote(name, unit) end)
   root:CreateButton("Post bounty...", function() GG:PromptBounty(name) end)
+  -- A button with child buttons is a submenu, as Blizzard builds them.
+  local watch = root:CreateButton("Add to watch list")
+  AddTagButtons(watch, function(tag) AskWatchNote(name, unit, tag) end)
 end
 
 if Menu and Menu.ModifyMenu then
@@ -1045,6 +1187,13 @@ local function OnTooltipUnit(tt)
   local e = GG:GetEntry(GG:UnitFullName(unit), false)
   if not e or not GG:IsListed(e) then return end
   local n = #GG:SortedNotes(e)
+  if GG:IsWatch(e) then
+    tt:AddLine(("|c%sWatch list:|r %d note%s"):format(WATCH_HEX, n, n == 1 and "" or "s"))
+    local tags = GG:EntryTags(e)
+    if #tags > 0 then tt:AddLine(("|c%s[%s]|r"):format(WATCH_HEX, table.concat(tags, "] ["))) end
+    tt:Show()
+    return
+  end
   tt:AddLine(("|cffff5533Grudge:|r %d note%s"):format(n, n == 1 and "" or "s"))
   local b = GG:ActiveBounty(e)
   if b then tt:AddLine("|cffffd100Bounty: " .. b.reward .. "|r") end
