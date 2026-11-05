@@ -93,28 +93,585 @@ local function ShowRowMenu(row)
   end)
 end
 
+-- HookScript keeps the highlight handlers that the button templates already set.
 local function Tip(button, text)
-  button:SetScript("OnEnter", function(self)
+  button:HookScript("OnEnter", function(self)
     if not GameTooltip then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetText(text)
     GameTooltip:Show()
   end)
-  button:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  button:HookScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
 end
 
-local function AddToolbarButton(f, label, tip, x, onClick)
-  local b = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  b:SetSize(92, 22)
-  b:SetPoint("TOPLEFT", x, -58)
-  b:SetText(label)
+local ICON = "Interface\\Icons\\"
+local CLASS_CIRCLES = "Interface\\TargetingFrame\\UI-Classes-Circles"
+local TABS = { "Wanted", "Bounties", "Hunters" }
+local EMPTY_TEXT = {
+  "Nobody on the list yet. Target a ganker and click the crosshair button.",
+  "No open bounties.",
+  "No bounties claimed yet.",
+}
+
+local function ClassRGB(e)
+  local c = e.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[e.class]
+  if c then return c.r, c.g, c.b end
+  return 1, 0.25, 0.25
+end
+
+-- An unknown class (or no coordinate table) shows a question mark, like the old red name.
+local function SetClassIcon(tex, e)
+  local coords = e.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[e.class]
+  if coords then
+    tex:SetTexture(CLASS_CIRCLES)
+    tex:SetTexCoord(unpack(coords))
+  else
+    tex:SetTexture(ICON .. "INV_Misc_QuestionMark")
+    tex:SetTexCoord(0, 1, 0, 1)
+  end
+end
+
+-- Bounties are free text, so a skull marks them instead of a gold coin.
+local function SetSkull(tex)
+  if SetRaidTargetIconTexture then SetRaidTargetIconTexture(tex, 8) end
+end
+
+local function Plural(n, word)
+  return ("%d %s%s"):format(n, word, n == 1 and "" or "s")
+end
+
+local function InfoText(e)
+  return strtrim(("%s %s"):format(e.level and ("lvl " .. e.level) or "", e.race or ""))
+end
+
+---------------------------------------------------------------------------
+-- Data for the three tabs
+---------------------------------------------------------------------------
+local function WantedList(bountiesOnly)
+  local list = {}
+  for key, e in pairs(GG.db.entries) do
+    local notes = GG:SortedNotes(e)
+    local bounty = GG:ActiveBounty(e)
+    if (#notes > 0 or bounty) and (bounty or not bountiesOnly) then
+      list[#list + 1] = { kind = "player", key = key, e = e, notes = notes, bounty = bounty }
+    end
+  end
+  table.sort(list, function(a, b)
+    local ab = a.bounty and 1 or 0
+    local bb = b.bounty and 1 or 0
+    if ab ~= bb then return ab > bb end
+    if #a.notes ~= #b.notes then return #a.notes > #b.notes end
+    return (a.e.lastSeen or 0) > (b.e.lastSeen or 0)
+  end)
+  return list
+end
+
+-- Same counting as GG:Top(), plus the claimed entries so the detail panel can list them.
+local function HunterList()
+  local byName, list = {}, {}
+  for _, e in pairs(GG.db.entries) do
+    local b = e.bounty
+    if b and (b.claimedBy or "") ~= "" then
+      local h = byName[b.claimedBy]
+      if not h then
+        h = { kind = "hunter", key = b.claimedBy, name = b.claimedBy, claims = {} }
+        byName[b.claimedBy] = h
+        list[#list + 1] = h
+      end
+      h.claims[#h.claims + 1] = { e = e, bounty = b }
+    end
+  end
+  for _, h in ipairs(list) do
+    h.count = #h.claims
+    table.sort(h.claims, function(a, b) return (a.bounty.claimedTs or 0) > (b.bounty.claimedTs or 0) end)
+  end
+  table.sort(list, function(a, b)
+    if a.count ~= b.count then return a.count > b.count end
+    return a.name < b.name
+  end)
+  return list
+end
+
+local function Matches(el, filter)
+  if filter == "" then return true end
+  if el.kind == "hunter" then return strlower(el.name):find(filter, 1, true) ~= nil end
+  if el.key:find(filter, 1, true) then return true end
+  for _, n in ipairs(el.notes) do
+    if strlower(n.text):find(filter, 1, true) then return true end
+  end
+  return false
+end
+
+---------------------------------------------------------------------------
+-- List rows
+---------------------------------------------------------------------------
+local function CreateRowRegions(row)
+  row.bg = row:CreateTexture(nil, "BACKGROUND")
+  row.bg:SetAllPoints()
+  row.bg:SetColorTexture(1, 1, 1, 0.04)
+
+  row.icon = row:CreateTexture(nil, "ARTWORK")
+  row.icon:SetSize(28, 28)
+  row.icon:SetPoint("LEFT", 6, 0)
+  row.hunterIcon = row:CreateTexture(nil, "ARTWORK")
+  row.hunterIcon:SetSize(28, 28)
+  row.hunterIcon:SetPoint("LEFT", 6, 0)
+  row.hunterIcon:SetAtlas("friends-icon-favorites")
+
+  row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  row.name:SetPoint("TOPLEFT", row.icon, "TOPRIGHT", 6, -1)
+  row.info = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  row.info:SetPoint("LEFT", row.name, "RIGHT", 6, 0)
+
+  row.note = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.note:SetPoint("BOTTOMLEFT", row.icon, "BOTTOMRIGHT", 6, 0)
+  row.note:SetJustifyH("LEFT")
+  row.note:SetWordWrap(false)
+
+  row.count = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  row.count:SetPoint("TOPRIGHT", -6, -6)
+  row.reward = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  row.reward:SetPoint("BOTTOMRIGHT", -6, 5)
+  row.skull = row:CreateTexture(nil, "ARTWORK")
+  row.skull:SetSize(14, 14)
+  row.skull:SetPoint("RIGHT", row.reward, "LEFT", -2, 0)
+  SetSkull(row.skull)
+
+  row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+  row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+  row:SetScript("OnClick", function(self, button)
+    if button == "RightButton" then
+      ShowRowMenu(self)
+    else
+      frame.selected = self.key
+      GG:RefreshUI()
+    end
+  end)
+  Tip(row, "Click for details, right-click for actions")
+end
+
+local function SetRowHunter(row, data)
+  row.icon:Hide()
+  row.hunterIcon:Show()
+  row.name:SetText(("%d. %s"):format(data.index, data.name))
+  row.name:SetTextColor(1, 0.82, 0)
+  row.info:SetText("")
+  row.note:SetWidth(250)
+  row.note:SetText(data.count == 1 and "1 bounty claimed" or (data.count .. " bounties claimed"))
+  row.count:SetText("")
+  row.skull:Hide()
+  row.reward:SetText("")
+end
+
+local function SetRowPlayer(row, data)
+  local e = data.e
+  row.icon:Show()
+  row.hunterIcon:Hide()
+  SetClassIcon(row.icon, e)
+  row.name:SetText(e.name)
+  row.name:SetTextColor(ClassRGB(e))
+  row.info:SetText(InfoText(e))
+  row.note:SetText(data.notes[1] and data.notes[1].text or "")
+  row.count:SetText(Plural(#data.notes, "note"))
+  if data.bounty then
+    row.note:SetWidth(170)
+    row.skull:Show()
+    row.reward:SetText(data.bounty.reward)
+  else
+    row.note:SetWidth(250)
+    row.skull:Hide()
+    row.reward:SetText("")
+  end
+end
+
+local function InitRow(row, data)
+  if not row.created then
+    row.created = true
+    CreateRowRegions(row)
+  end
+  row.key, row.entry = data.key, data.e
+  row.bg:SetShown(data.index % 2 == 0)
+  if data.kind == "hunter" then SetRowHunter(row, data) else SetRowPlayer(row, data) end
+  if frame.selected == data.key then row:LockHighlight() else row:UnlockHighlight() end
+end
+
+---------------------------------------------------------------------------
+-- Detail panel
+---------------------------------------------------------------------------
+local DETAIL_W = 296
+local PAD = 10
+local CONTENT_W = DETAIL_W - 2 * PAD
+local NOTE_W = 256 -- the note list is 264 wide, minus 4px of padding on each side
+
+local function SetShown(widgets, shown)
+  for _, w in ipairs(widgets) do w:SetShown(shown) end
+end
+
+-- Measures with a hidden FontString of the same font and width, so row heights match what is drawn.
+local function TextHeight(fs, text)
+  fs:SetText(text)
+  return fs:GetStringHeight() or 0
+end
+
+local function NoteBlock(d, text, meta)
+  local height = TextHeight(d.measureText, text) + TextHeight(d.measureMeta, meta ~= "" and meta or "X") + 8
+  return { text = text, meta = meta, height = height }
+end
+
+local function PlayerBlocks(d, notes)
+  local blocks = {}
+  for _, n in ipairs(notes) do
+    local parts = { n.author, GG:Age(n.ts) }
+    if n.zone and n.zone ~= "" then parts[#parts + 1] = n.zone end
+    blocks[#blocks + 1] = NoteBlock(d, n.text, table.concat(parts, " - "))
+  end
+  if #blocks == 0 then blocks[1] = NoteBlock(d, "No notes.", "") end
+  return blocks
+end
+
+local function ClaimBlocks(d, claims)
+  local blocks = {}
+  for _, c in ipairs(claims) do
+    blocks[#blocks + 1] = NoteBlock(d, ("%s  |cffffd100%s|r"):format(GG:ColorName(c.e), c.bounty.reward),
+      GG:Age(c.bounty.claimedTs))
+  end
+  return blocks
+end
+
+local function SetNotes(d, heading, blocks)
+  d.notesHeading:SetText(heading)
+  local dp = CreateDataProvider()
+  for i, block in ipairs(blocks) do
+    block.index = i
+    dp:Insert(block)
+  end
+  d.notesBox:SetDataProvider(dp)
+end
+
+-- Each visible section hangs below the one above it, so a hidden section leaves no gap.
+local function Relayout(d, hasButtons)
+  local prev = d.header
+  for _, section in ipairs({ d.bountySec, d.seenSec, d.notesSec }) do
+    if section:IsShown() then
+      section:ClearAllPoints()
+      section:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -6)
+      prev = section
+    end
+  end
+  d.notesSec:SetPoint("BOTTOMRIGHT", d, "BOTTOMRIGHT", 0, hasButtons and 38 or 10)
+end
+
+local function UpdateDetailPlayer(d, el)
+  local e, b = el.e, el.bounty
+  d.entry = e
+  SetClassIcon(d.icon, e)
+  d.name:SetText(e.name)
+  d.name:SetTextColor(ClassRGB(e))
+  d.info:SetText(strtrim(("%s %s %s"):format(
+    e.level and ("lvl " .. e.level) or "", e.race or "", e.class and strlower(e.class) or "")))
+
+  local claimed = e.bounty and (e.bounty.claimedBy or "") ~= "" and e.bounty
+  d.bountySec:SetShown((b or claimed) and true or false)
+  if b then
+    d.reward:SetText(b.reward)
+    d.bountyMeta:SetText("Posted by " .. b.poster)
+  elseif claimed then
+    d.reward:SetText(claimed.reward)
+    d.bountyMeta:SetText(("Claimed by %s, %s"):format(claimed.claimedBy, GG:Age(claimed.claimedTs)))
+  end
+
+  d.seenSec:SetShown(e.lastSeen and true or false)
+  if e.lastSeen then
+    d.seenLine:SetText(("%s by %s"):format(GG:Age(e.lastSeen), e.lastSeenBy or "?"))
+    d.seenZone:SetText(e.lastSeenZone or "?")
+  end
+
+  SetNotes(d, ("Notes (%d)"):format(#el.notes), PlayerBlocks(d, el.notes))
+  d.bountyButton:SetText(b and "Remove bounty" or "Post bounty")
+  if b then d.claimButton:Enable() else d.claimButton:Disable() end
+  SetShown(d.playerOnly, true)
+end
+
+local function UpdateDetailHunter(d, el)
+  d.entry = nil
+  d.icon:SetAtlas("friends-icon-favorites")
+  d.name:SetText(el.name)
+  d.name:SetTextColor(1, 0.82, 0)
+  d.info:SetText(el.count == 1 and "1 bounty claimed" or (el.count .. " bounties claimed"))
+  d.bountySec:Hide()
+  d.seenSec:Hide()
+  SetNotes(d, ("Claimed bounties (%d)"):format(el.count), ClaimBlocks(d, el.claims))
+  SetShown(d.playerOnly, false)
+end
+
+local function UpdateDetail(d, el)
+  if not el then
+    d.entry = nil
+    SetShown(d.always, false)
+    SetShown(d.playerOnly, false)
+    d.bountySec:Hide()
+    d.seenSec:Hide()
+    d.hint:Show()
+    return
+  end
+  d.hint:Hide()
+  SetShown(d.always, true)
+  if el.kind == "hunter" then UpdateDetailHunter(d, el) else UpdateDetailPlayer(d, el) end
+  Relayout(d, el.kind ~= "hunter")
+end
+
+---------------------------------------------------------------------------
+-- Window pieces
+---------------------------------------------------------------------------
+local function AddIconButton(f, anchor, tip, icon, atlas, onClick)
+  local b = CreateFrame("Button", nil, f, "SquareIconButtonTemplate")
+  b:SetSize(26, 26)
+  if anchor then b:SetPoint("TOPRIGHT", anchor, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -12, -29) end
+  if icon and b.SetIcon then b:SetIcon(icon) end
+  if atlas and b.SetAtlas then b:SetAtlas(atlas) end
   b:SetScript("OnClick", onClick)
   Tip(b, tip)
+  return b
+end
+
+local function BuildToolbar(f)
+  local search = CreateFrame("EditBox", nil, f, "SearchBoxTemplate")
+  search:SetSize(200, 20)
+  search:SetPoint("TOPLEFT", 72, -32)
+  search:SetAutoFocus(false)
+  search:HookScript("OnTextChanged", function() GG:RefreshUI() end)
+  f.search = search
+
+  -- Created right to left, so the settings button sits at the edge.
+  local b = AddIconButton(f, nil, "Settings", nil, "questlog-icon-setting", function()
+    if GG.OpenSettings then GG:OpenSettings() end
+  end)
+  b = AddIconButton(f, b, "Put a /gg macro on your cursor", ICON .. "INV_Misc_Book_09", nil, function()
+    if GG.MakeMacro then GG:MakeMacro() end
+  end)
+  b = AddIconButton(f, b, "Add a player by name", nil, "communities-icon-addchannelplus", function()
+    GG:PromptAddPlayer()
+  end)
+  AddIconButton(f, b, "Note your target", ICON .. "Ability_Hunter_SniperShot", nil, function()
+    local full = UnitIsPlayer("target") and GG:UnitFullName("target")
+    if full then GG:PromptNote(full, "target") else GG:Print("Target a player first.") end
+  end)
+end
+
+local function BuildList(f)
+  local inset = f.Inset
+  inset:ClearAllPoints()
+  inset:SetPoint("TOPLEFT", f, "TOPLEFT", 4, -60)
+  inset:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 4, 26)
+  inset:SetWidth(330)
+
+  local box = CreateFrame("Frame", nil, inset, "WowScrollBoxList")
+  box:SetPoint("TOPLEFT", inset, "TOPLEFT", 4, -4)
+  box:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", -14, 4)
+  local bar = CreateFrame("EventFrame", nil, inset, "MinimalScrollBar")
+  bar:SetPoint("TOPLEFT", box, "TOPRIGHT", 2, 0)
+  bar:SetPoint("BOTTOMLEFT", box, "BOTTOMRIGHT", 2, 0)
+
+  local view = CreateScrollBoxListLinearView()
+  view:SetElementExtent(40)
+  view:SetElementInitializer("Button", InitRow)
+  ScrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
+  if ScrollUtil.AddManagedScrollBarVisibilityBehavior then
+    ScrollUtil.AddManagedScrollBarVisibilityBehavior(box, bar)
+  end
+  f.box = box
+
+  -- On the ScrollBox, because regions of the window itself draw under the Inset.
+  local empty = box:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  empty:SetPoint("CENTER")
+  empty:SetWidth(260)
+  empty:SetJustifyH("CENTER")
+  f.empty = empty
+end
+
+local function Label(parent, font, x, y, width)
+  local fs = parent:CreateFontString(nil, "OVERLAY", font)
+  fs:SetPoint("TOPLEFT", x, y)
+  fs:SetWidth(width)
+  fs:SetJustifyH("LEFT")
+  fs:SetWordWrap(false)
+  return fs
+end
+
+local function CreateSection(d, height)
+  local s = CreateFrame("Frame", nil, d)
+  s:SetSize(DETAIL_W, height)
+  return s
+end
+
+local function CreateHeader(d)
+  local h = CreateSection(d, 60)
+  h:SetPoint("TOPLEFT")
+  d.header = h
+  d.icon = h:CreateTexture(nil, "ARTWORK")
+  d.icon:SetSize(40, 40)
+  d.icon:SetPoint("TOPLEFT", PAD, -PAD)
+  d.name = h:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  d.name:SetPoint("TOPLEFT", d.icon, "TOPRIGHT", 8, -2)
+  d.name:SetWidth(CONTENT_W - 48)
+  d.name:SetJustifyH("LEFT")
+  d.name:SetWordWrap(false)
+  d.info = h:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  d.info:SetPoint("TOPLEFT", d.name, "BOTTOMLEFT", 0, -4)
+  d.info:SetWidth(CONTENT_W - 48)
+  d.info:SetJustifyH("LEFT")
+  d.info:SetWordWrap(false)
+end
+
+local function CreateBountySection(d)
+  local s = CreateSection(d, 48)
+  d.bountySec = s
+  Label(s, "GameFontNormal", PAD, 0, CONTENT_W):SetText("Bounty")
+  d.skull = s:CreateTexture(nil, "ARTWORK")
+  d.skull:SetSize(14, 14)
+  d.skull:SetPoint("TOPLEFT", PAD, -17)
+  SetSkull(d.skull)
+  d.reward = s:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  d.reward:SetPoint("LEFT", d.skull, "RIGHT", 4, 0)
+  d.reward:SetWidth(CONTENT_W - 18)
+  d.reward:SetJustifyH("LEFT")
+  d.reward:SetWordWrap(false)
+  d.bountyMeta = Label(s, "GameFontDisableSmall", PAD, -34, CONTENT_W)
+end
+
+local function CreateSeenSection(d)
+  local s = CreateSection(d, 44)
+  d.seenSec = s
+  Label(s, "GameFontNormal", PAD, 0, CONTENT_W):SetText("Last seen")
+  d.seenLine = Label(s, "GameFontHighlightSmall", PAD, -16, CONTENT_W)
+  d.seenZone = Label(s, "GameFontDisableSmall", PAD, -30, CONTENT_W)
+end
+
+local function InitNote(el, data)
+  if not el.created then
+    el.created = true
+    el.bg = el:CreateTexture(nil, "BACKGROUND")
+    el.bg:SetAllPoints()
+    el.bg:SetColorTexture(1, 1, 1, 0.04)
+    el.text = el:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    el.text:SetPoint("TOPLEFT", 4, -3)
+    el.text:SetWidth(NOTE_W)
+    el.text:SetJustifyH("LEFT")
+    el.text:SetJustifyV("TOP")
+    el.meta = el:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    el.meta:SetPoint("TOPLEFT", el.text, "BOTTOMLEFT", 0, -1)
+    el.meta:SetWidth(NOTE_W)
+    el.meta:SetJustifyH("LEFT")
+    el.meta:SetWordWrap(false)
+  end
+  el.bg:SetShown(data.index % 2 == 0)
+  el.text:SetText(data.text)
+  el.meta:SetText(data.meta)
+end
+
+local function CreateNotesSection(d)
+  local s = CreateFrame("Frame", nil, d)
+  s:SetWidth(DETAIL_W)
+  d.notesSec = s
+  d.notesHeading = Label(s, "GameFontNormal", PAD, 0, CONTENT_W)
+  local line = s:CreateTexture()
+  line:SetColorTexture(1, 1, 1, 0.15)
+  line:SetPoint("TOPLEFT", PAD, -16)
+  line:SetPoint("TOPRIGHT", -PAD, -16)
+  line:SetHeight(1)
+
+  local box = CreateFrame("Frame", nil, s, "WowScrollBoxList")
+  box:SetPoint("TOPLEFT", PAD, -20)
+  box:SetPoint("BOTTOMRIGHT", -22, 0)
+  local bar = CreateFrame("EventFrame", nil, s, "MinimalScrollBar")
+  bar:SetPoint("TOPLEFT", box, "TOPRIGHT", 2, 0)
+  bar:SetPoint("BOTTOMLEFT", box, "BOTTOMRIGHT", 2, 0)
+  local view = CreateScrollBoxListLinearView()
+  view:SetElementInitializer("Frame", InitNote)
+  view:SetElementExtentCalculator(function(_, el) return el.height end)
+  ScrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
+  if ScrollUtil.AddManagedScrollBarVisibilityBehavior then
+    ScrollUtil.AddManagedScrollBarVisibilityBehavior(box, bar)
+  end
+  d.notesBox = box
+
+  d.measureText = d:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  d.measureText:SetWidth(NOTE_W)
+  d.measureText:SetJustifyH("LEFT")
+  d.measureText:Hide()
+  d.measureMeta = d:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  d.measureMeta:SetWidth(NOTE_W)
+  d.measureMeta:SetWordWrap(false)
+  d.measureMeta:Hide()
+end
+
+local function CreateDetailWidgets(d)
+  CreateHeader(d)
+  CreateBountySection(d)
+  CreateSeenSection(d)
+  CreateNotesSection(d)
+
+  d.hint = d:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  d.hint:SetPoint("CENTER")
+  d.hint:SetText("Select a player to see all notes.")
+
+  d.always = { d.header, d.notesSec }
+  d.playerOnly = {}
+end
+
+local function AddDetailButton(d, x, width, label, onClick)
+  local b = CreateFrame("Button", nil, d, "UIPanelButtonTemplate")
+  b:SetSize(width, 22)
+  b:SetPoint("BOTTOMLEFT", x, 10)
+  b:SetText(label)
+  b:SetScript("OnClick", onClick)
+  d.playerOnly[#d.playerOnly + 1] = b
+  return b
+end
+
+local function BuildDetail(f)
+  local d = CreateFrame("Frame", nil, f, "InsetFrameTemplate")
+  d:SetPoint("TOPLEFT", f.Inset, "TOPRIGHT", 4, 0)
+  d:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -60)
+  d:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -6, 26)
+  CreateDetailWidgets(d)
+
+  -- 80 + 112 + 80 plus two 6px gaps is 284, so the row starts 6px in from the left edge.
+  d.addButton = AddDetailButton(d, 6, 80, "Add note", function()
+    if d.entry then GG:PromptNote(d.entry.name) end
+  end)
+  d.bountyButton = AddDetailButton(d, 92, 112, "Post bounty", function()
+    local e = d.entry
+    if not e then return end
+    if GG:ActiveBounty(e) then GG:ClearBounty(e.name) else GG:PromptBounty(e.name) end
+  end)
+  d.claimButton = AddDetailButton(d, 210, 80, "Claim", function()
+    if d.entry then GG:TryClaim(d.entry.name, true) end
+  end)
+  f.detail = d
+end
+
+local function BuildTabs(f)
+  f.tab = 1
+  for i, label in ipairs(TABS) do
+    local t = CreateFrame("Button", "GuildGrudgeFrameTab" .. i, f, "PanelTabButtonTemplate")
+    t:SetID(i)
+    t:SetText(label)
+    if i == 1 then t:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 5, 2) end
+    t:SetScript("OnClick", function(self)
+      f.tab = self:GetID()
+      PanelTemplates_SetTab(f, f.tab)
+      f.selected = nil
+      GG:RefreshUI()
+    end)
+  end
+  PanelTemplates_SetNumTabs(f, #TABS)
+  PanelTemplates_SetTab(f, 1)
 end
 
 local function Build()
-  local f = CreateFrame("Frame", "GuildGrudgeFrame", UIParent, "BasicFrameTemplateWithInset")
-  f:SetSize(420, 480)
+  local f = CreateFrame("Frame", "GuildGrudgeFrame", UIParent, "ButtonFrameTemplate")
+  f:SetSize(640, 480)
   f:SetPoint("CENTER")
   f:SetFrameStrata("HIGH")
   f:SetMovable(true)
@@ -125,72 +682,19 @@ local function Build()
   f:SetScript("OnDragStop", f.StopMovingOrSizing)
   tinsert(UISpecialFrames, "GuildGrudgeFrame") -- Escape closes it
 
-  local title = f.TitleText
-  if not title then
-    title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    title:SetPoint("TOP", 0, -5)
-  end
-  title:SetText("Guild Grudge - Most Wanted")
+  if f.SetTitle then f:SetTitle("Guild Grudge") end
+  if f.SetPortraitToAsset then f:SetPortraitToAsset(ICON .. "Ability_Hunter_SniperShot") end
+  -- Icon files carry their own border, so crop it to sit centred in the round mask.
+  if f.SetPortraitTexCoord then f:SetPortraitTexCoord(0.08, 0.92, 0.08, 0.92) end
 
-  local search = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
-  search:SetSize(200, 20)
-  search:SetPoint("TOPLEFT", 20, -32)
-  search:SetAutoFocus(false)
-  search:SetScript("OnTextChanged", function() GG:RefreshUI() end)
-  search:SetScript("OnEscapePressed", search.ClearFocus)
-  f.search = search
-
-  local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-  hint:SetPoint("LEFT", search, "RIGHT", 8, 0)
-  hint:SetText("search names and notes")
-
-  AddToolbarButton(f, "Note target", "Add a note on your current target", 20, function()
-    local full = UnitIsPlayer("target") and GG:UnitFullName("target")
-    if full then GG:PromptNote(full, "target") else GG:Print("Target a player first.") end
-  end)
-  AddToolbarButton(f, "Add player", "Add a note on a player by name", 116, function() GG:PromptAddPlayer() end)
-  AddToolbarButton(f, "Macro", "Put a macro that opens this window on your cursor", 212, function()
-    if GG.MakeMacro then GG:MakeMacro() end
-  end)
-  AddToolbarButton(f, "Settings", "Open the Guild Grudge settings", 308, function()
-    if GG.OpenSettings then GG:OpenSettings() end
-  end)
-
-  local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", 12, -88)
-  scroll:SetPoint("BOTTOMRIGHT", -32, 12)
-  local child = CreateFrame("Frame", nil, scroll)
-  child:SetSize(370, 10)
-  scroll:SetScrollChild(child)
-
-  local empty = child:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  empty:SetPoint("TOPLEFT", 4, -4)
-  empty:SetWidth(362)
-  empty:SetJustifyH("LEFT")
-  empty:SetJustifyV("TOP")
-  f.empty, f.child, f.rows = empty, child, {}
+  BuildToolbar(f)
+  BuildList(f)
+  BuildDetail(f)
+  BuildTabs(f)
 
   f:SetScript("OnShow", function() GG:RefreshUI() end)
   f:Hide()
   return f
-end
-
-local function GetRow(f, i)
-  local row = f.rows[i]
-  if row then return row end
-  row = CreateFrame("Button", nil, f.child)
-  row:SetWidth(370)
-  row:RegisterForClicks("AnyUp")
-  row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-  row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  row.text:SetPoint("TOPLEFT", 4, -4)
-  row.text:SetWidth(362)
-  row.text:SetJustifyH("LEFT")
-  row.text:SetJustifyV("TOP")
-  row:SetScript("OnClick", ShowRowMenu)
-  Tip(row, "Right-click for actions")
-  f.rows[i] = row
-  return row
 end
 
 function GG:ToggleUI()
@@ -200,71 +704,36 @@ end
 
 function GG:RefreshUI()
   if not frame or not frame:IsShown() then return end
+  local tab = frame.tab
+  local all = tab == 3 and HunterList() or WantedList(tab == 2)
+
+  -- The selection survives a search that hides it, but not a deleted or claimed entry.
+  local selected
+  for _, el in ipairs(all) do
+    if el.key == frame.selected then selected = el; break end
+  end
+  if not selected then frame.selected = nil end
+
   local filter = strlower(strtrim(frame.search:GetText() or ""))
   local list = {}
-  for key, e in pairs(self.db.entries) do
-    local notes = self:SortedNotes(e)
-    if #notes > 0 or self:ActiveBounty(e) then
-      local match = filter == "" or key:find(filter, 1, true)
-      if not match then
-        for _, n in ipairs(notes) do
-          if strlower(n.text):find(filter, 1, true) then match = true; break end
-        end
-      end
-      if match then list[#list + 1] = { e = e, notes = notes } end
+  for _, el in ipairs(all) do
+    if Matches(el, filter) then
+      list[#list + 1] = el
+      el.index = #list
     end
   end
 
-  table.sort(list, function(a, b)
-    local ab = GG:ActiveBounty(a.e) and 1 or 0
-    local bb = GG:ActiveBounty(b.e) and 1 or 0
-    if ab ~= bb then return ab > bb end
-    if #a.notes ~= #b.notes then return #a.notes > #b.notes end
-    return (a.e.lastSeen or 0) > (b.e.lastSeen or 0)
-  end)
+  local dp = CreateDataProvider()
+  for _, el in ipairs(list) do dp:Insert(el) end
+  frame.box:SetDataProvider(dp, ScrollBoxConstants.RetainScrollPosition)
 
-  local shown = math.min(#list, 150)
-  local y = 0
-  for i = 1, shown do
-    local e, notes = list[i].e, list[i].notes
-    local out = {}
-    local info = strtrim(("%s %s"):format(e.level and ("lvl " .. e.level) or "", e.race or ""))
-    out[#out + 1] = ("%s  |cff999999%s[%d note%s]|r"):format(
-      self:ColorName(e), info ~= "" and (info .. "  ") or "", #notes, #notes == 1 and "" or "s")
-    local b = self:ActiveBounty(e)
-    if b then out[#out + 1] = "   |cffffd100BOUNTY: " .. b.reward .. "|r  |cff999999(by " .. b.poster .. ")|r" end
-    if e.lastSeen then
-      out[#out + 1] = ("   |cff999999Seen %s in %s by %s|r"):format(self:Age(e.lastSeen), e.lastSeenZone or "?", e.lastSeenBy or "?")
-    end
-    for j = 1, math.min(3, #notes) do
-      out[#out + 1] = ("   - %s |cff999999(%s, %s)|r"):format(notes[j].text, notes[j].author, self:Age(notes[j].ts))
-    end
-    if #notes > 3 then out[#out + 1] = ("   |cff999999...and %d more (right-click: Show all notes)|r"):format(#notes - 3) end
-
-    local row = GetRow(frame, i)
-    row.entry = e
-    row.text:SetText(table.concat(out, "\n"))
-    local h = (row.text:GetStringHeight() or 0) + 8
-    row:SetHeight(h)
-    row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", frame.child, "TOPLEFT", 0, -y)
-    row:Show()
-    y = y + h
-  end
-  for i = shown + 1, #frame.rows do
-    frame.rows[i].entry = nil
-    frame.rows[i]:Hide()
-  end
-
-  if shown == 0 then
-    frame.empty:SetText(filter == "" and "Nobody on the list yet.\n\nTarget a ganker and type:\n/gg t camped me at the flight path"
-                                     or "No matches.")
+  if #list == 0 then
+    frame.empty:SetText(filter ~= "" and "No matches." or EMPTY_TEXT[tab])
     frame.empty:Show()
-    y = (frame.empty:GetStringHeight() or 0) + 4
   else
     frame.empty:Hide()
   end
-  frame.child:SetHeight(y + 10)
+  UpdateDetail(frame.detail, selected)
 end
 
 -- Right-click menu on unit frames and portraits

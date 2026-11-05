@@ -84,7 +84,7 @@ local function CreateButton()
   local icon = button:CreateTexture(nil, "ARTWORK")
   icon:SetSize(18, 18)
   icon:SetTexture(ICON)
-  icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+  icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
   icon:SetPoint("CENTER")
 
   local border = button:CreateTexture(nil, "OVERLAY")
