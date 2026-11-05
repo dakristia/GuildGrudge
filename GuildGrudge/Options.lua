@@ -74,19 +74,21 @@ local function CreateButton()
   button:RegisterForDrag("LeftButton")
   button:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
+  -- The border texture's ring sits in its top-left part, so it stays anchored
+  -- TOPLEFT at 50x50 while the background and icon are centered in the ring.
   local bg = button:CreateTexture(nil, "BACKGROUND")
-  bg:SetSize(20, 20)
+  bg:SetSize(24, 24)
   bg:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
-  bg:SetPoint("TOPLEFT", 7, -5)
+  bg:SetPoint("CENTER")
 
   local icon = button:CreateTexture(nil, "ARTWORK")
-  icon:SetSize(17, 17)
+  icon:SetSize(18, 18)
   icon:SetTexture(ICON)
   icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-  icon:SetPoint("TOPLEFT", 7, -6)
+  icon:SetPoint("CENTER")
 
   local border = button:CreateTexture(nil, "OVERLAY")
-  border:SetSize(53, 53)
+  border:SetSize(50, 50)
   border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
   border:SetPoint("TOPLEFT")
 
@@ -132,6 +134,9 @@ local function RegisterSettings()
     local setting = Settings.RegisterAddOnSetting(category, "GUILDGRUDGE_ALERTCOOLDOWN", "alertCooldown", s,
       Settings.VarType.Number, "Alert cooldown (seconds)", 60)
     local options = Settings.CreateSliderOptions(15, 300, 15)
+    if MinimalSliderWithSteppersMixin and options.SetLabelFormatter then
+      options:SetLabelFormatter(MinimalSliderWithSteppersMixin.Label.Right, function(value) return ("%d s"):format(value) end)
+    end
     Settings.CreateSlider(category, setting, options,
       "Seconds a listed player must be out of sight before they can alert you again.")
   end
