@@ -1378,7 +1378,9 @@ local function AddUnitMenuItems(_, root, ctx)
   -- A mob or NPC has a unit but is not a player, so it gets no Guild Grudge items.
   -- Menus without a unit (chat names, the friends list) only carry a name.
   if unit then
-    if not UnitIsPlayer(unit) then return end
+    if GG:Secret(unit) then return end
+    local ok, isPlayer = pcall(UnitIsPlayer, unit)
+    if not ok or GG:Secret(isPlayer) or not isPlayer then return end
     name = GG:UnitFullName(unit)
   elseif ctx.name then
     name = GG:FullName(ctx.name, ctx.surname)
@@ -1403,7 +1405,10 @@ end
 local function OnTooltipUnit(tt)
   if tt ~= GameTooltip or not GG.db then return end
   local _, unit = tt:GetUnit()
-  if not unit or not UnitIsPlayer(unit) then return end
+  -- In instances the tooltip's unit is a secret value, and UnitIsPlayer throws on it.
+  if not unit or GG:Secret(unit) then return end
+  local ok, isPlayer = pcall(UnitIsPlayer, unit)
+  if not ok or GG:Secret(isPlayer) or not isPlayer then return end
   local e = GG:GetEntry(GG:UnitFullName(unit), false)
   if not e or not GG:IsListed(e) then return end
   local n = #GG:SortedNotes(e)
