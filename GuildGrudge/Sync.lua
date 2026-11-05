@@ -4,6 +4,7 @@
 --   N^1^key^name^^class^id^author^ts^deleted^zone^text^tag  a note (new, edited or deleted); tag is optional
 --   B^1^key^name^^poster^ts^claimedBy^claimedTs^reward      a bounty (posted, claimed or removed)
 --   V^1^key^name^^noteId^voter^v^ts                         a vote on a note (v = 1, -1 or 0 for removed)
+--   G^1^key^name^^voter^v^ts                                a vote on a nice name (v = 1, -1 or 0 for removed)
 --   S^1^key^name^^class^zone                                "I just spotted this player"
 --   P^1^key^name^^class^raceFile^race^sex^level^ts          a player's class, race, sex and level (newest ts wins)
 --   L^1^key^name^^list^ts                                   which list a player is on (list = watch or wanted; newest ts wins)
@@ -91,6 +92,11 @@ function GG:SendVote(key, e, n, voter, channel, target)
   self:Send(join("V", PROTO, key, e.name, "", n.id, voter, vote.v, vote.ts), channel, target)
 end
 
+function GG:SendNameVote(key, n, voter, channel, target)
+  local vote = n.votes[voter]
+  self:Send(join("G", PROTO, key, n.name, "", voter, vote.v, vote.ts), channel, target)
+end
+
 function GG:SendSpotted(key, e, zone)
   self:Send(join("S", PROTO, key, e.name, "", e.class, zone), "GUILD")
 end
@@ -133,6 +139,12 @@ function GG:DumpTo(target, since)
   end
   for key, n in pairs(self.db.names) do
     if n.ts > since then self:SendNiceName(key, n, "WHISPER", target) end
+  end
+  -- Name votes go after the names, because the receiver ignores votes on names it doesn't know.
+  for key, n in pairs(self.db.names) do
+    for voter, vote in pairs(n.votes or {}) do
+      if vote.ts > since then self:SendNameVote(key, n, voter, "WHISPER", target) end
+    end
   end
 end
 
@@ -183,6 +195,19 @@ handlers.V = function(t)
   local voter, v, ts = nz(t[7]), tonumber(t[8]), tonumber(t[9])
   if not n or not voter or not ts or (v ~= 1 and v ~= -1 and v ~= 0) then return end
   if voter == n.author then return end
+  n.votes = n.votes or {}
+  local old = n.votes[voter]
+  if old and old.ts >= ts then return end
+  n.votes[voter] = { v = v, ts = ts }
+  GG:Changed()
+end
+
+handlers.G = function(t)
+  local full = GG:NormalizeName(t[4])
+  local n = full and GG.db.names[GG:MakeKey(full)]
+  local voter, v, ts = nz(t[6]), tonumber(t[7]), tonumber(t[8])
+  if not n or not voter or not ts or (v ~= 1 and v ~= -1 and v ~= 0) then return end
+  if voter == n.by then return end
   n.votes = n.votes or {}
   local old = n.votes[voter]
   if old and old.ts >= ts then return end

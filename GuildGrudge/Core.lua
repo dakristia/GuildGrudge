@@ -18,6 +18,8 @@ local DEFAULTS = {
   minimapAngle   = 200,   -- where the minimap button sits, in degrees around the minimap
   watchNearby    = false, -- a chat line (no raid warning) when a watch-list player is near
   watchGroup     = true,  -- a raid warning when a watch-list player joins your group
+  sortMode       = "newest", -- how the window orders every list: "newest", "oldest", "name" or "votes"
+  mineOnly       = false, -- show only the players and names you added, noted, posted a bounty on or claimed
 }
 
 ---------------------------------------------------------------------------
@@ -168,7 +170,8 @@ end
 -- GuildGrudgeDB.names[key] = {          -- the nice names list; separate from entries, so nothing else sees it
 --   name, by,                           -- by = who added it
 --   ts, deleted,                        -- ts = last change, newer wins when syncing; deleted is kept so it syncs
---   class, race, raceFile, sex, level   -- same meaning as on an entry
+--   class, race, raceFile, sex, level,  -- same meaning as on an entry
+--   votes = { [voterFullName] = { v = 1 | -1 | 0, ts } }  -- same as note votes; 0 = vote removed, kept so it syncs
 -- }
 ---------------------------------------------------------------------------
 function GG:InitDB()
@@ -248,6 +251,15 @@ end
 function GG:MyVote(n)
   local vote = n.votes and n.votes[self:Me()]
   return vote and vote.v or 0
+end
+
+-- Nice names carry votes in the same shape as notes, so they are counted the same way.
+function GG:NameScore(n)
+  return self:NoteScore(n)
+end
+
+function GG:MyNameVote(n)
+  return self:MyVote(n)
 end
 
 -- Best note first: highest score, and the newest note wins a tie.
@@ -345,6 +357,9 @@ function GG:MaxTs()
   end
   for _, n in pairs(self.db.names) do
     if (n.ts or 0) > max then max = n.ts end
+    for _, vote in pairs(n.votes or {}) do
+      if vote.ts > max then max = vote.ts end
+    end
   end
   return max
 end
@@ -505,19 +520,84 @@ function GG:RemoveNiceName(name)
   self:Changed()
 end
 
--- Live names, newest first.
+-- value: 1 (up), -1 (down) or 0 (take the vote back)
+function GG:VoteName(name, value)
+  local full = self:NormalizeName(name)
+  local key = full and self:MakeKey(full)
+  local n = key and self.db.names[key]
+  if not n or n.deleted then return self:Print("That name is gone.") end
+  local me = self:Me()
+  if n.by == me then return self:Print("You can't vote on a name you added.") end
+  n.votes = n.votes or {}
+  n.votes[me] = { v = value, ts = self:Now() }
+  self:SendNameVote(key, n, me, "GUILD")
+  self:Changed()
+end
+
+-- Live names, in no particular order; the window sorts them.
 function GG:NiceNames()
-  local list = {}
-  for key, n in pairs(self.db.names) do
-    if not n.deleted then list[#list + 1] = { key = key, n = n } end
+  local names = {}
+  for _, n in pairs(self.db.names) do
+    if not n.deleted then names[#names + 1] = n end
+  end
+  return names
+end
+
+-- Does this list element involve us? An element is what the window builds for a row:
+-- { kind = "player", e = entry }, { kind = "name", e = name } or { kind = "hunter", name = hunterName }.
+function GG:IsMine(el)
+  local me = self:Me()
+  if el.kind == "hunter" then return el.name == me end
+  if el.kind == "name" then return el.e.by == me end
+  for _, n in pairs(el.e.notes) do
+    if n.author == me and not n.deleted then return true end
+  end
+  local b = el.e.bounty
+  return b ~= nil and (b.claimedBy == me or ((b.reward or "") ~= "" and b.poster == me))
+end
+
+-- What the sort modes compare: a lowercase name, the time of the last activity and a score.
+local function SortKeys(el)
+  if el.kind == "hunter" then
+    local ts = 0
+    for _, c in ipairs(el.claims) do
+      if (c.bounty.claimedTs or 0) > ts then ts = c.bounty.claimedTs end
+    end
+    return strlower(el.name), ts, #el.claims
+  end
+  local e = el.e
+  if el.kind == "name" then return strlower(e.name), e.ts or 0, GG:NameScore(e) end
+  local ts, score = 0, 0
+  for _, n in pairs(e.notes) do
+    if not n.deleted then
+      if n.ts > ts then ts = n.ts end
+      score = score + GG:NoteScore(n)
+    end
+  end
+  if e.bounty and (e.bounty.ts or 0) > ts then ts = e.bounty.ts end
+  return strlower(e.name), ts, score
+end
+
+-- mode: "newest", "oldest", "name" or "votes". Anything else counts as "newest". A tie falls back to A-Z.
+function GG:SortElements(list, mode)
+  local keys = {}
+  for _, el in ipairs(list) do
+    local name, ts, score = SortKeys(el)
+    keys[el] = { name = name, ts = ts, score = score }
   end
   table.sort(list, function(a, b)
-    if a.n.ts ~= b.n.ts then return a.n.ts > b.n.ts end
-    return a.key < b.key
+    local ka, kb = keys[a], keys[b]
+    if mode == "oldest" then
+      if ka.ts ~= kb.ts then return ka.ts < kb.ts end
+    elseif mode == "votes" then
+      if ka.score ~= kb.score then return ka.score > kb.score end
+    elseif mode ~= "name" then
+      if ka.ts ~= kb.ts then return ka.ts > kb.ts end
+    end
+    if ka.name ~= kb.name then return ka.name < kb.name end
+    return (a.key or "") < (b.key or "")
   end)
-  local names = {}
-  for i, item in ipairs(list) do names[i] = item.n end
-  return names
+  return list
 end
 
 function GG:Show(input)

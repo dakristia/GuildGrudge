@@ -133,6 +133,10 @@ local function RegisterSettings()
     "Show a warning when someone from your watch list joins your party or raid.")
   Checkbox("minimapButton", "Show minimap button", "Show the Guild Grudge button on the minimap.",
     function() GG:UpdateMinimapButton() end)
+  -- The sort order has no entry here: it needs Settings.CreateDropdown, which this file does not use yet. Use the window's dropdown.
+  Checkbox("mineOnly", "Window: mine only",
+    "Only show players and names you added, noted, posted a bounty on or claimed.",
+    function() GG:RefreshUI() end)
 
   if Settings.CreateSlider and Settings.CreateSliderOptions then
     local setting = Settings.RegisterAddOnSetting(category, "GUILDGRUDGE_ALERTCOOLDOWN", "alertCooldown", s,

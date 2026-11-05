@@ -43,6 +43,9 @@ Forever names have two parts. Type them as `Ana Forever` or `Ana-Forever`. `show
 - **Bounties:** getting the killing blow on a player with an open bounty (the `PARTY_KILL` event) claims it and posts in guild chat.
 - **Watch list:** for friendly players you want to keep an eye on (ninja looters, scammers). Pick the list when you add a player, and give a note a tag such as "Ninja looter". Watch-list players only warn you when they join your group (and optionally with a chat line when nearby), and they cannot have bounties.
 - **Nice names:** a guild-shared list of funny character names, on the Names tab. No notes, alerts or bounties. Right-click a player's portrait and pick Add to nice names, or use `/gg nice`. Anyone can remove a name. It is kept apart from the grudge lists.
+- **Name votes:** nice names can be voted up or down with the arrows at the right edge of a Names row, like notes. You can't vote on a name you added. Votes sync with the guild.
+- **Sorting:** the dropdown next to the search box orders every tab by newest, oldest, A-Z or most votes. Hunters are ranked by their number of claims under "Most votes".
+- **Mine only:** the checkbox next to the dropdown (also in the settings) shows only the players and names you added, noted, posted a bounty on or claimed.
 - **Tooltip:** listed players get a "Grudge: N notes / Bounty" line.
 
 ## Check these first in game

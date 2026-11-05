@@ -753,5 +753,200 @@ test("nice names never show up as grudge entries", function()
   noErrors(a); noErrors(b)
 end)
 
+---------------------------------------------------------------------------
+-- Name votes
+---------------------------------------------------------------------------
+test("a name vote syncs to the guild and changes its score", function()
+  local a, b = unpack(guild(2))
+  a.ns:AddNiceName("Anaconda")
+  W.advance(2)
+  b.ns:VoteName("Anaconda", 1)
+  W.advance(2)
+  local n = a.ns.db.names["anaconda"]
+  eq(a.ns:NameScore(n), 1, "A score")
+  eq(b.ns:MyNameVote(b.ns.db.names["anaconda"]), 1, "B own vote")
+  eq(a.ns:MyNameVote(n), 0, "A has not voted")
+  b.ns:VoteName("Anaconda", 0)
+  W.advance(2)
+  eq(a.ns:NameScore(n), 0, "after removal")
+  eq(n.votes["Player2"].v, 0, "removal record kept")
+  noErrors(a); noErrors(b)
+end)
+
+test("voting on a name you added is refused and sends nothing", function()
+  local a = guild(2)[1]
+  a.ns:AddNiceName("Anaconda")
+  W.advance(2)
+  local sent = W.log.sent
+  a.chat = {}
+  a.ns:VoteName("Anaconda", 1)
+  W.advance(2)
+  eq(W.log.sent, sent, "messages sent")
+  assert(chatHas(a, "You can't vote on a name you added."), "message: " .. table.concat(a.chat, " / "))
+  eq(a.ns:NameScore(a.ns.db.names["anaconda"]), 0, "score")
+end)
+
+test("voting on a missing or removed name says it is gone", function()
+  local a = guild(1)[1]
+  a.ns:VoteName("Nobody", 1)
+  assert(chatHas(a, "That name is gone."), "missing: " .. table.concat(a.chat, " / "))
+  a.ns.db.names["anaconda"] = { name = "Anaconda", by = "Other", ts = W.serverTime, deleted = true }
+  a.chat = {}
+  a.ns:VoteName("Anaconda", 1)
+  assert(chatHas(a, "That name is gone."), "removed: " .. table.concat(a.chat, " / "))
+end)
+
+test("a name vote survives a login sync", function()
+  local a, b = unpack(guild(2))
+  a.ns:AddNiceName("Anaconda")
+  W.advance(2)
+  b.ns:VoteName("Anaconda", -1)
+  W.advance(2)
+  local d = W.newClient({ name = "Newbie", realm = "Realm" })
+  W.login(d)
+  W.advance(40)
+  eq(d.ns:NameScore(d.ns.db.names["anaconda"]), -1, "newcomer score")
+  noErrors(d)
+end)
+
+test("an older G is ignored, a newer one wins, and the adder's own G is ignored", function()
+  local a, b = unpack(guild(2))
+  a.ns:AddNiceName("Anaconda")
+  W.advance(2)
+  b.ns:VoteName("Anaconda", -1)
+  W.advance(2)
+  local n = a.ns.db.names["anaconda"]
+  b.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "G^1^anaconda^Anaconda^^Player2^1^" .. (W.serverTime - 100), "GUILD")
+  eq(a.ns:NameScore(n), -1, "stale vote ignored")
+  b.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "G^1^anaconda^Anaconda^^Player2^1^" .. (W.serverTime + 100), "GUILD")
+  eq(a.ns:NameScore(n), 1, "newer vote wins")
+  b.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "G^1^anaconda^Anaconda^^Player1^1^" .. (W.serverTime + 100), "GUILD")
+  eq(n.votes["Player1"], nil, "no vote from the adder")
+  b.env.C_ChatInfo.SendAddonMessage("GGRUDGE",
+    "G^1^unknown^Unknown^^Player2^1^" .. W.serverTime, "GUILD")
+  eq(a.ns.db.names["unknown"], nil, "G does not create names")
+  noErrors(a)
+end)
+
+test("MaxTs counts name votes", function()
+  local a = guild(1)[1]
+  a.ns.db.names["x"] = { name = "X", by = "Y", ts = W.serverTime, votes = { Z = { v = 1, ts = W.serverTime + 9000 } } }
+  eq(a.ns:MaxTs(), W.serverTime + 9000)
+end)
+
+---------------------------------------------------------------------------
+-- Sorting and the mine filter
+---------------------------------------------------------------------------
+local function order(list)
+  local names = {}
+  for i, el in ipairs(list) do names[i] = el.name or el.e.name end
+  return table.concat(names, ",")
+end
+
+-- Three players: Bob has the newest activity, Amy the best score, Cat the oldest.
+local function playerElements(ns)
+  local function player(name, notes, bounty)
+    local e = ns:GetEntry(name, true)
+    for i, n in ipairs(notes) do
+      n.id, n.author = name .. i, n.author or "X"
+      e.notes[n.id] = n
+    end
+    e.bounty = bounty
+    return { kind = "player", key = ns:MakeKey(name), e = e }
+  end
+  return {
+    player("Cat", { { ts = 100, text = "c" } }),
+    player("Bob", { { ts = 200, text = "b" } }),
+    player("Amy", { { ts = 150, text = "a", votes = { Y = { v = 1, ts = 1 }, Z = { v = 1, ts = 1 } } },
+                    { ts = 120, text = "a2", deleted = true } }),
+  }
+end
+
+test("SortElements orders players by newest, oldest, A-Z and most votes", function()
+  local ns = guild(1)[1].ns
+  local list = playerElements(ns)
+  eq(order(ns:SortElements(list, "newest")), "Bob,Amy,Cat")
+  eq(order(ns:SortElements(list, "oldest")), "Cat,Amy,Bob")
+  eq(order(ns:SortElements(list, "name")), "Amy,Bob,Cat")
+  eq(order(ns:SortElements(list, "votes")), "Amy,Bob,Cat", "score 2, then a tie sorted A-Z")
+  eq(order(ns:SortElements(list, nil)), "Bob,Amy,Cat", "unknown mode counts as newest")
+end)
+
+test("a bounty counts as player activity, and a deleted note does not", function()
+  local ns = guild(1)[1].ns
+  local list = playerElements(ns)
+  list[1].e.bounty = { poster = "X", reward = "50g", ts = 500, claimedBy = "", claimedTs = 0 } -- Cat
+  list[3].e.notes.Amy2.ts = 900 -- Amy's deleted note
+  eq(order(ns:SortElements(list, "newest")), "Cat,Bob,Amy")
+end)
+
+test("SortElements names ties A-Z and ignores case", function()
+  local ns = guild(1)[1].ns
+  local list = {
+    { kind = "name", key = "b", e = { name = "bravo", ts = 5 } },
+    { kind = "name", key = "a", e = { name = "Alpha", ts = 5 } },
+    { kind = "name", key = "c", e = { name = "Charlie", ts = 5 } },
+  }
+  eq(order(ns:SortElements(list, "newest")), "Alpha,bravo,Charlie")
+  eq(order(ns:SortElements(list, "name")), "Alpha,bravo,Charlie")
+end)
+
+test("SortElements sorts names by score and hunters by claims", function()
+  local ns = guild(1)[1].ns
+  local names = {
+    { kind = "name", key = "a", e = { name = "Alpha", ts = 1, votes = { X = { v = -1, ts = 1 } } } },
+    { kind = "name", key = "b", e = { name = "Bravo", ts = 2, votes = { X = { v = 1, ts = 1 } } } },
+    { kind = "name", key = "c", e = { name = "Charlie", ts = 3 } },
+  }
+  eq(order(ns:SortElements(names, "votes")), "Bravo,Charlie,Alpha")
+  local function hunter(name, ...)
+    local claims = {}
+    for i, ts in ipairs({ ... }) do claims[i] = { bounty = { claimedTs = ts } } end
+    return { kind = "hunter", key = name, name = name, claims = claims }
+  end
+  local hunters = { hunter("Zed", 10, 20), hunter("Ann", 30), hunter("Max", 5, 6, 7) }
+  eq(order(ns:SortElements(hunters, "votes")), "Max,Zed,Ann")
+  eq(order(ns:SortElements(hunters, "newest")), "Ann,Zed,Max")
+  eq(order(ns:SortElements(hunters, "oldest")), "Max,Zed,Ann")
+  eq(order(ns:SortElements(hunters, "name")), "Ann,Max,Zed")
+end)
+
+test("IsMine on players: your live note, a bounty you posted, or a bounty you claimed", function()
+  local ns = guild(1)[1].ns -- Me() is Player1
+  local function player(name, setup)
+    local e = ns:GetEntry(name, true)
+    setup(e)
+    return { kind = "player", e = e }
+  end
+  assert(ns:IsMine(player("A", function(e) e.notes.n = { id = "n", author = "Player1", ts = 1, text = "x" } end)), "own note")
+  assert(not ns:IsMine(player("B", function(e) e.notes.n = { id = "n", author = "Player1", ts = 1, text = "x", deleted = true } end)),
+    "own deleted note")
+  assert(not ns:IsMine(player("C", function(e) e.notes.n = { id = "n", author = "Other", ts = 1, text = "x" } end)), "other's note")
+  assert(ns:IsMine(player("D", function(e) e.bounty = { poster = "Player1", reward = "50g", ts = 1, claimedBy = "" } end)), "own bounty")
+  assert(not ns:IsMine(player("E", function(e) e.bounty = { poster = "Player1", reward = "", ts = 1, claimedBy = "" } end)),
+    "own removed bounty")
+  assert(ns:IsMine(player("F", function(e) e.bounty = { poster = "Other", reward = "50g", ts = 1, claimedBy = "Player1" } end)),
+    "claimed by you")
+  assert(not ns:IsMine(player("G", function(e) e.bounty = { poster = "Other", reward = "50g", ts = 1, claimedBy = "Other" } end)),
+    "claimed by another")
+end)
+
+test("IsMine on names and hunters", function()
+  local ns = guild(1)[1].ns
+  assert(ns:IsMine({ kind = "name", e = { name = "A", by = "Player1" } }), "own name")
+  assert(not ns:IsMine({ kind = "name", e = { name = "B", by = "Other" } }), "other's name")
+  assert(ns:IsMine({ kind = "hunter", name = "Player1", claims = {} }), "yourself as hunter")
+  assert(not ns:IsMine({ kind = "hunter", name = "Other", claims = {} }), "another hunter")
+end)
+
+test("the sort and mine settings have defaults", function()
+  local a = guild(1)[1]
+  eq(a.ns.db.settings.sortMode, "newest")
+  eq(a.ns.db.settings.mineOnly, false)
+end)
+
 print(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

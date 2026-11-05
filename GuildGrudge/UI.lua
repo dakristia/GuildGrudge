@@ -185,6 +185,13 @@ local EMPTY_TEXT = {
   [TAB_NAMES] = "No nice names yet. Right-click a player's portrait and pick Add to nice names.",
 }
 
+local SORTS = {
+  { mode = "newest", label = "Newest" },
+  { mode = "oldest", label = "Oldest" },
+  { mode = "name", label = "A-Z" },
+  { mode = "votes", label = "Most votes" },
+}
+
 local function ClassRGB(e)
   local c = e.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[e.class]
   if c then return c.r, c.g, c.b end
@@ -333,7 +340,7 @@ local function InfoText(e)
 end
 
 ---------------------------------------------------------------------------
--- Data for the three tabs
+-- Data for the tabs. RefreshUI sorts every list with GG:SortElements.
 ---------------------------------------------------------------------------
 local function WantedList(bountiesOnly)
   local list = {}
@@ -344,13 +351,6 @@ local function WantedList(bountiesOnly)
       list[#list + 1] = { kind = "player", key = key, e = e, notes = notes, bounty = bounty }
     end
   end
-  table.sort(list, function(a, b)
-    local ab = a.bounty and 1 or 0
-    local bb = b.bounty and 1 or 0
-    if ab ~= bb then return ab > bb end
-    if #a.notes ~= #b.notes then return #a.notes > #b.notes end
-    return (a.e.lastSeen or 0) > (b.e.lastSeen or 0)
-  end)
   return list
 end
 
@@ -362,10 +362,6 @@ local function WatchList()
       list[#list + 1] = { kind = "player", key = key, e = e, notes = notes, tags = GG:EntryTags(e) }
     end
   end
-  table.sort(list, function(a, b)
-    if #a.notes ~= #b.notes then return #a.notes > #b.notes end
-    return (a.e.lastSeen or 0) > (b.e.lastSeen or 0)
-  end)
   return list
 end
 
@@ -388,14 +384,10 @@ local function HunterList()
     h.count = #h.claims
     table.sort(h.claims, function(a, b) return (a.bounty.claimedTs or 0) > (b.bounty.claimedTs or 0) end)
   end
-  table.sort(list, function(a, b)
-    if a.count ~= b.count then return a.count > b.count end
-    return a.name < b.name
-  end)
   return list
 end
 
--- Nice names, newest first. The record has name, class, race, raceFile, sex and level, like an entry.
+-- Nice names. The record has name, class, race, raceFile, sex and level, like an entry.
 local function NameList()
   local list = {}
   for _, n in ipairs(GG:NiceNames()) do
@@ -413,6 +405,73 @@ local function Matches(el, filter)
     if n.tag and strlower(n.tag):find(filter, 1, true) then return true end
   end
   return false
+end
+
+---------------------------------------------------------------------------
+-- Vote control: an up arrow, the score and a down arrow. Notes and nice names both use it.
+---------------------------------------------------------------------------
+local VOTE_W = 24 -- the right edge of a note block or a name row belongs to the vote control
+local ARROW_UP, ARROW_DOWN = "minimal-scrollbar-arrow-top", "minimal-scrollbar-arrow-bottom"
+
+-- The current vote shows at full strength and tinted, the other arrow dims.
+local function StyleArrow(button, active, r, g, b)
+  local tex = button:GetNormalTexture()
+  if tex then
+    if active then tex:SetVertexColor(r, g, b) else tex:SetVertexColor(1, 1, 1) end
+  end
+  button:SetAlpha(active and 1 or 0.85)
+end
+
+-- onVote(value) gets 1 or -1.
+local function CreateArrow(parent, atlas, value, onVote)
+  local b = CreateFrame("Button", nil, parent)
+  -- The arrow art is 17x11, so a smaller button blurs it.
+  b:SetSize(17, 11)
+  if b.SetNormalAtlas then b:SetNormalAtlas(atlas) end
+  if b.SetHighlightAtlas then b:SetHighlightAtlas(atlas) end
+  b:SetScript("OnClick", function() onVote(value) end)
+  Tip(b, value == 1 and "Vote up" or "Vote down")
+  return b
+end
+
+local function CreateVoteControl(owner, onVote)
+  local v = CreateFrame("Frame", nil, owner)
+  v:SetWidth(VOTE_W - 2)
+  v:SetPoint("TOPRIGHT", -2, -1)
+  v:SetPoint("BOTTOMRIGHT", -2, 1)
+  v.up = CreateArrow(v, ARROW_UP, 1, onVote)
+  v.up:SetPoint("TOP")
+  v.down = CreateArrow(v, ARROW_DOWN, -1, onVote)
+  v.down:SetPoint("BOTTOM")
+  v.score = v:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  v.score:SetPoint("CENTER")
+  v.score:SetWidth(VOTE_W - 2)
+  v.score:SetJustifyH("CENTER")
+  return v
+end
+
+local function SetScoreColor(fs, score)
+  if score > 0 then fs:SetTextColor(0.4, 1, 0.4)
+  elseif score < 0 then fs:SetTextColor(1, 0.4, 0.4)
+  else fs:SetTextColor(0.5, 0.5, 0.5) end
+end
+
+-- Your own note or name cannot be voted on, but its score still shows.
+local function ShowVote(vote, score, myVote, own)
+  vote.score:SetText(score)
+  SetScoreColor(vote.score, score)
+  vote.up:SetShown(not own)
+  vote.down:SetShown(not own)
+  StyleArrow(vote.up, myVote == 1, 0.4, 1, 0.4)
+  StyleArrow(vote.down, myVote == -1, 1, 0.4, 0.4)
+end
+
+local function SendNameVote(row, value)
+  local n = row.entry
+  if row.kind ~= "name" or not n or not GG.VoteName then return end
+  if GG:MyNameVote(n) == value then value = 0 end -- clicking your own vote again takes it back
+  GG:VoteName(n.name, value)
+  GG:RefreshUI()
 end
 
 ---------------------------------------------------------------------------
@@ -466,6 +525,8 @@ local function CreateRowRegions(row)
   row.stripe:SetPoint("TOPLEFT")
   row.stripe:SetPoint("BOTTOMLEFT")
   row.stripe:SetColorTexture(WATCH_R, WATCH_G, WATCH_B, 1)
+  -- Only name rows show it. The arrows are child buttons, so they take their own clicks and the row still gets the rest.
+  row.vote = CreateVoteControl(row, function(value) SendNameVote(row, value) end)
 
   row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
   row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -533,7 +594,7 @@ local function SetRowName(row, data)
   row.name:SetTextColor(ClassRGB(e))
   row.info:SetText(InfoText(e))
   row.note:SetTextColor(0.6, 0.6, 0.6)
-  row.note:SetWidth(250)
+  row.note:SetWidth(250 - VOTE_W) -- the vote control takes the right edge
   row.note:SetText(("Added by %s, %s"):format(ColoredName(e.by or "?"), GG:Age(e.ts)))
   row.count:SetText("")
   row.skull:Hide()
@@ -558,6 +619,11 @@ local function InitRow(row, data)
   if data.kind == "hunter" then SetRowHunter(row, data)
   elseif data.kind == "name" then SetRowName(row, data)
   else SetRowPlayer(row, data) end
+  -- Rows are recycled, so the vote control is shown for name rows and hidden for every other kind.
+  row.vote:SetShown(data.kind == "name")
+  if data.kind == "name" then
+    ShowVote(row.vote, GG:NameScore(data.e), GG:MyNameVote(data.e), data.e.by == GG:Me())
+  end
   if frame.selected == data.key then row:LockHighlight() else row:UnlockHighlight() end
 end
 
@@ -568,10 +634,8 @@ local DETAIL_W = 296
 local PAD = 10
 local CONTENT_W = DETAIL_W - 2 * PAD
 local NOTE_W = 256 -- the note list is 264 wide, minus 4px of padding on each side
-local VOTE_W = 24 -- the right edge of a note block belongs to the vote control
 local TEXT_W = NOTE_W - VOTE_W
 local STAR_W = 16 -- the first place star shifts that note's text right
-local ARROW_UP, ARROW_DOWN = "minimal-scrollbar-arrow-top", "minimal-scrollbar-arrow-bottom"
 
 local function SetShown(widgets, shown)
   for _, w in ipairs(widgets) do w:SetShown(shown) end
@@ -746,7 +810,7 @@ local function UpdateDetailName(d, el)
   d.watchSec:Hide()
   d.seenSec:Hide()
   d.addedSec:Show()
-  d.addedLine:SetText(("Added by %s, %s"):format(ColoredName(e.by or "?"), GG:Age(e.ts)))
+  d.addedLine:SetText(("Added by %s, %s - score %d"):format(ColoredName(e.by or "?"), GG:Age(e.ts), GG:NameScore(e)))
   d.notesSec:Hide()
   SetShown(d.playerOnly, false)
   SetShown(d.nameOnly, true)
@@ -789,11 +853,46 @@ end
 
 local function BuildToolbar(f)
   local search = CreateFrame("EditBox", nil, f, "SearchBoxTemplate")
-  search:SetSize(200, 20)
+  search:SetSize(150, 20)
   search:SetPoint("TOPLEFT", 72, -32)
   search:SetAutoFocus(false)
   search:HookScript("OnTextChanged", function() GG:RefreshUI() end)
   f.search = search
+
+  -- One radio per sort mode. Blizzard calls isSelected(value) and setSelected(value) with the value we pass.
+  local sort = CreateFrame("DropdownButton", nil, f, "WowStyle1DropdownTemplate")
+  sort:SetWidth(110)
+  sort:SetPoint("LEFT", search, "RIGHT", 8, 0)
+  if sort.SetupMenu then
+    sort:SetupMenu(function(_, root)
+      for _, option in ipairs(SORTS) do
+        root:CreateRadio(option.label, function(mode) return GG.db.settings.sortMode == mode end,
+          function(mode)
+            GG.db.settings.sortMode = mode
+            GG:RefreshUI()
+          end, option.mode)
+      end
+    end)
+  end
+  f.sort = sort
+
+  -- UICheckButtonTemplate names its label Text, as the guild member list does with its "Show offline" box.
+  local mine = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+  mine:SetSize(24, 24)
+  mine:SetPoint("LEFT", sort, "RIGHT", 6, 0)
+  if mine.Text then
+    mine.Text:SetText("Mine only")
+  else
+    local label = mine:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    label:SetPoint("LEFT", mine, "RIGHT", 2, 0)
+    label:SetText("Mine only")
+  end
+  mine:SetScript("OnClick", function(self)
+    GG.db.settings.mineOnly = self:GetChecked() and true or false
+    GG:RefreshUI()
+  end)
+  Tip(mine, "Only show players and names you added, noted, posted a bounty on or claimed")
+  f.mine = mine
 
   -- Created right to left, so the settings button sits at the edge.
   local b = AddIconButton(f, nil, "Settings", nil, "questlog-icon-setting", function()
@@ -941,58 +1040,10 @@ local function SendVote(el, value)
   GG:RefreshUI()
 end
 
--- The current vote shows at full strength and tinted, the other arrow dims.
-local function StyleArrow(button, active, r, g, b)
-  local tex = button:GetNormalTexture()
-  if tex then
-    if active then tex:SetVertexColor(r, g, b) else tex:SetVertexColor(1, 1, 1) end
-  end
-  button:SetAlpha(active and 1 or 0.85)
-end
-
-local function CreateArrow(parent, atlas, value, el)
-  local b = CreateFrame("Button", nil, parent)
-  -- The arrow art is 17x11, so a smaller button blurs it.
-  b:SetSize(17, 11)
-  if b.SetNormalAtlas then b:SetNormalAtlas(atlas) end
-  if b.SetHighlightAtlas then b:SetHighlightAtlas(atlas) end
-  b:SetScript("OnClick", function() SendVote(el, value) end)
-  Tip(b, value == 1 and "Vote up" or "Vote down")
-  return b
-end
-
-local function CreateVoteControl(el)
-  local v = CreateFrame("Frame", nil, el)
-  v:SetWidth(VOTE_W - 2)
-  v:SetPoint("TOPRIGHT", -2, -1)
-  v:SetPoint("BOTTOMRIGHT", -2, 1)
-  v.up = CreateArrow(v, ARROW_UP, 1, el)
-  v.up:SetPoint("TOP")
-  v.down = CreateArrow(v, ARROW_DOWN, -1, el)
-  v.down:SetPoint("BOTTOM")
-  v.score = v:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  v.score:SetPoint("CENTER")
-  v.score:SetWidth(VOTE_W - 2)
-  v.score:SetJustifyH("CENTER")
-  return v
-end
-
-local function SetScoreColor(fs, score)
-  if score > 0 then fs:SetTextColor(0.4, 1, 0.4)
-  elseif score < 0 then fs:SetTextColor(1, 0.4, 0.4)
-  else fs:SetTextColor(0.5, 0.5, 0.5) end
-end
-
 local function UpdateVote(el, data)
   el.vote:SetShown(data.voting and true or false)
   if not data.voting then return end
-  el.vote.score:SetText(data.score)
-  SetScoreColor(el.vote.score, data.score)
-  -- Your own note cannot be voted on, but its score still shows.
-  el.vote.up:SetShown(not data.own)
-  el.vote.down:SetShown(not data.own)
-  StyleArrow(el.vote.up, data.myVote == 1, 0.4, 1, 0.4)
-  StyleArrow(el.vote.down, data.myVote == -1, 1, 0.4, 0.4)
+  ShowVote(el.vote, data.score, data.myVote, data.own)
 end
 
 local function InitNote(el, data)
@@ -1011,7 +1062,7 @@ local function InitNote(el, data)
     el.star:SetSize(14, 14)
     el.star:SetPoint("TOPLEFT", 4, -3)
     el.star:SetAtlas("friends-icon-favorites")
-    el.vote = CreateVoteControl(el)
+    el.vote = CreateVoteControl(el, function(value) SendVote(el, value) end)
   end
   el.note, el.entryName = data.note, data.entryName
   el.bg:SetShown(data.index % 2 == 0)
@@ -1210,6 +1261,10 @@ function GG:RefreshUI()
   elseif tab == TAB_WATCH then all = WatchList()
   elseif tab == TAB_NAMES then all = NameList()
   else all = WantedList(tab == TAB_BOUNTIES) end
+  local settings = GG.db.settings
+  GG:SortElements(all, settings.sortMode)
+  -- The settings panel can change these too, so the toolbar follows the setting.
+  frame.mine:SetChecked(settings.mineOnly)
 
   -- The selection survives a search that hides it, but not a deleted or claimed entry.
   local selected
@@ -1221,7 +1276,7 @@ function GG:RefreshUI()
   local filter = strlower(strtrim(frame.search:GetText() or ""))
   local list = {}
   for _, el in ipairs(all) do
-    if Matches(el, filter) then
+    if Matches(el, filter) and (not settings.mineOnly or GG:IsMine(el)) then
       list[#list + 1] = el
       el.index = #list
     end
@@ -1232,7 +1287,10 @@ function GG:RefreshUI()
   frame.box:SetDataProvider(dp, ScrollBoxConstants.RetainScrollPosition)
 
   if #list == 0 then
-    frame.empty:SetText(filter ~= "" and "No matches." or EMPTY_TEXT[tab])
+    local text = EMPTY_TEXT[tab]
+    if filter ~= "" then text = "No matches."
+    elseif settings.mineOnly and #all > 0 then text = "Nothing of yours here." end
+    frame.empty:SetText(text)
     frame.empty:Show()
   else
     frame.empty:Hide()
