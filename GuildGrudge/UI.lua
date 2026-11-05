@@ -173,9 +173,30 @@ end
 
 -- One picture for the list rows and the detail header, best source first:
 -- live portrait, then race and sex icon (both with a class badge), then class icon, then a question mark.
+-- The classic race faces are all on one 8x4 sheet: male faces in rows 0-1, female faces two rows lower.
+-- Races that are not on the sheet fall back to the modern race atlas.
+local RACE_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Races"
+local RACE_TILES = {
+  HUMAN = { 0, 0 }, DWARF = { 1, 0 }, GNOME = { 2, 0 }, NIGHTELF = { 3, 0 },
+  DRAENEI = { 4, 0 }, WORGEN = { 5, 0 }, PANDAREN = { 6, 0 },
+  TAUREN = { 0, 1 }, SCOURGE = { 1, 1 }, TROLL = { 2, 1 }, ORC = { 3, 1 },
+  BLOODELF = { 4, 1 }, GOBLIN = { 5, 1 },
+}
+
+local function ClassicRaceCoords(e)
+  local tile = e.raceFile and e.sex and RACE_TILES[strupper(e.raceFile)]
+  if not tile then return nil end
+  local col, row = tile[1], tile[2] + (e.sex == 3 and 2 or 0)
+  -- A small inset drops the tile's own frame, which the round mask would otherwise show at the edge.
+  local w, h = 1 / 8, 1 / 4
+  return col * w + w * 0.08, (col + 1) * w - w * 0.08, row * h + h * 0.08, (row + 1) * h - h * 0.08
+end
+
 local function SetPicture(portrait, icon, badge, e, key)
   local token = SetPortraitTexture and FindUnit(key)
-  local raceAtlas = not token and RaceAtlas(e)
+  local l, r, t, b
+  if not token then l, r, t, b = ClassicRaceCoords(e) end
+  local raceAtlas = not token and not l and RaceAtlas(e)
   if token then
     SetPortraitTexture(portrait, token)
     portrait:Show()
@@ -183,11 +204,18 @@ local function SetPicture(portrait, icon, badge, e, key)
   else
     portrait:Hide()
     icon:Show()
-    SetRaceMask(icon, raceAtlas and true or false)
-    if raceAtlas then icon:SetAtlas(raceAtlas) else SetClassIcon(icon, e) end
+    SetRaceMask(icon, (l or raceAtlas) and true or false)
+    if l then
+      icon:SetTexture(RACE_SHEET)
+      icon:SetTexCoord(l, r, t, b)
+    elseif raceAtlas then
+      icon:SetAtlas(raceAtlas)
+    else
+      SetClassIcon(icon, e)
+    end
   end
   -- The portrait and the race icon both hide the class, so the badge adds it back; an unknown class gets no badge.
-  if (token or raceAtlas) and e.class then
+  if (token or l or raceAtlas) and e.class then
     SetClassIcon(badge, e)
     badge:Show()
   else
