@@ -2,7 +2,7 @@
 local ADDON, GG = ...
 _G.GuildGrudge = GG
 
-GG.VERSION  = "0.7.0"
+GG.VERSION  = "0.8.0"
 GG.PREFIX   = "GGRUDGE"   -- addon message prefix (max 16 chars)
 GG.MAX_NOTE = 120         -- max note length in bytes (addon messages cap at 255)
 GG.MAX_TAG  = 24          -- max tag length in bytes
